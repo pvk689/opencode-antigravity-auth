@@ -51,6 +51,7 @@ import { initLogger, createLogger } from "./plugin/logger";
 import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
 import { initAntigravityVersion } from "./plugin/version";
 import { executeSearch } from "./plugin/search";
+import { hasAgyToken, importAgyToken } from "./plugin/agy-importer";
 import type {
   GetAuth,
   LoaderResult,
@@ -2875,6 +2876,43 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 break;
               }
+
+              if (menuResult.mode === "import-agy") {
+                console.log("\n📥 Importing token from Antigravity CLI (~/.gemini)...\n");
+                const agyResult = await importAgyToken();
+                if (agyResult.type === "failed") {
+                  console.log(`❌ Failed to import token: ${agyResult.error}\n`);
+                  return {
+                    url: "",
+                    instructions: `Failed to import Antigravity CLI token: ${agyResult.error}`,
+                    method: "auto",
+                    callback: async () => agyResult,
+                  };
+                }
+
+                await persistAccountPool([agyResult], false);
+                try {
+                  await client.auth.set({
+                    path: { id: providerId },
+                    body: {
+                      type: "oauth",
+                      refresh: agyResult.refresh,
+                      access: agyResult.access,
+                      expires: agyResult.expires,
+                    },
+                  });
+                } catch (storeError) {
+                  log.error("Failed to store imported Antigravity OAuth credentials", { error: String(storeError) });
+                }
+
+                console.log(`✓ Successfully imported ${agyResult.email || "account"} from Antigravity CLI!\n`);
+                return {
+                  url: "",
+                  instructions: `Successfully imported account from Antigravity CLI (${agyResult.email || "default"}).`,
+                  method: "auto",
+                  callback: async () => agyResult,
+                };
+              }
               
               if (menuResult.mode === "cancel") {
                 return {
@@ -2970,6 +3008,48 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 console.log("\nStarting fresh - existing accounts will be replaced.\n");
               } else if (!startFresh) {
                 console.log("\nAdding to existing accounts.\n");
+              }
+            } else if (hasAgyToken() && process.stdin.isTTY) {
+              console.log("\n💡 Found existing Antigravity CLI session in ~/.gemini!");
+              const { createInterface } = await import("node:readline/promises");
+              const rl = createInterface({ input: process.stdin, output: process.stdout });
+              let shouldImport = false;
+              try {
+                const answer = await rl.question("Import existing credentials from Antigravity CLI? (Y/n): ");
+                const normalized = answer.trim().toLowerCase();
+                shouldImport = normalized === "" || normalized === "y" || normalized === "yes";
+              } finally {
+                rl.close();
+              }
+
+              if (shouldImport) {
+                console.log("\n📥 Importing token from Antigravity CLI (~/.gemini)...\n");
+                const agyResult = await importAgyToken();
+                if (agyResult.type === "success") {
+                  await persistAccountPool([agyResult], true);
+                  try {
+                    await client.auth.set({
+                      path: { id: providerId },
+                      body: {
+                        type: "oauth",
+                        refresh: agyResult.refresh,
+                        access: agyResult.access,
+                        expires: agyResult.expires,
+                      },
+                    });
+                  } catch (storeError) {
+                    log.error("Failed to store imported Antigravity OAuth credentials", { error: String(storeError) });
+                  }
+                  console.log(`✓ Successfully imported ${agyResult.email || "account"} from Antigravity CLI!\n`);
+                  return {
+                    url: "",
+                    instructions: `Successfully imported account from Antigravity CLI (${agyResult.email || "default"}).`,
+                    method: "auto",
+                    callback: async () => agyResult,
+                  };
+                } else {
+                  console.log(`❌ Import failed: ${agyResult.error}. Falling back to browser OAuth...\n`);
+                }
               }
             }
 

@@ -16,6 +16,7 @@ export interface AccountInfo {
 
 export type AuthMenuAction =
   | { type: 'add' }
+  | { type: 'import-agy' }
   | { type: 'select-account'; account: AccountInfo }
   | { type: 'delete-all' }
   | { type: 'check' }
@@ -54,7 +55,8 @@ function getStatusBadge(status: AccountStatus | undefined): string {
 export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAction> {
   const items: MenuItem<AuthMenuAction>[] = [
     { label: 'Actions', value: { type: 'cancel' }, kind: 'heading' },
-    { label: 'Add account', value: { type: 'add' }, color: 'cyan' },
+    { label: 'Add account (OAuth browser)', value: { type: 'add' }, color: 'cyan' },
+    { label: 'Import from Antigravity CLI (~/.gemini)', value: { type: 'import-agy' }, color: 'cyan' },
     { label: 'Check quotas', value: { type: 'check' }, color: 'cyan' },
     { label: 'Verify one account', value: { type: 'verify' }, color: 'cyan' },
     { label: 'Verify all accounts', value: { type: 'verify-all' }, color: 'cyan' },

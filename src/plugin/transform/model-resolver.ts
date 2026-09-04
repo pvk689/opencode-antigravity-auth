@@ -54,6 +54,20 @@ export const MODEL_ALIASES: Record<string, string> = {
   "gemini-claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
   "gemini-claude-sonnet-4-6": "claude-sonnet-4-6",
 
+  // Gemini 3.x Flash tiered models (Antigravity CCPA API)
+  "gemini-3.6-flash": "gemini-3.6-flash-tiered",
+  "gemini-3.6-flash-low": "gemini-3.6-flash-tiered",
+  "gemini-3.6-flash-medium": "gemini-3.6-flash-tiered",
+  "gemini-3.6-flash-high": "gemini-3.6-flash-tiered",
+  "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-low": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-medium": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
+  "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+  "gemini-3.8-flash-low": "gemini-3.8-flash-tiered",
+  "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
+  "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
+
   // Image generation models - only gemini-3-pro-image is available via Antigravity API
   // Note: gemini-2.5-flash-image (Nano Banana) is NOT supported by Antigravity - only Google AI API
   // Reference: Antigravity-Manager/src-tauri/src/proxy/common/model_mapping.rs
@@ -63,6 +77,7 @@ const TIER_REGEX = /-(minimal|low|medium|high)$/;
 const QUOTA_PREFIX_REGEX = /^antigravity-/i;
 const GEMINI_3_PRO_REGEX = /^gemini-3(?:\.\d+)?-pro/i;
 const GEMINI_3_FLASH_REGEX = /^gemini-3(?:\.\d+)?-flash/i;
+const GEMINI_3_FLASH_TIERED_REGEX = /^gemini-3\.\d+-flash/i;
 
 // ANTIGRAVITY_ONLY_MODELS removed - all models now default to antigravity
 
@@ -137,6 +152,13 @@ function isGemini3FlashModel(model: string): boolean {
   return GEMINI_3_FLASH_REGEX.test(model);
 }
 
+function isGemini3FlashTieredModel(model: string): boolean {
+  if (model.toLowerCase().includes("-preview")) {
+    return false;
+  }
+  return GEMINI_3_FLASH_TIERED_REGEX.test(model);
+}
+
 /**
  * Resolves a model name with optional tier suffix and quota prefix to its actual API model name
  * and corresponding thinking configuration.
@@ -178,21 +200,28 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
 
   // For Antigravity Gemini 3 Pro models without explicit tier, append default tier
   // Antigravity API: gemini-3-pro requires tier suffix (gemini-3-pro-low/high)
+  //                  gemini-3.x-flash requires -tiered suffix
   //                  gemini-3-flash uses bare name + thinkingLevel param
   // Pro defaults to -low unless an explicit tier is provided
   const isGemini3Pro = isGemini3ProModel(modelWithoutQuota);
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota);
+  const isGemini3FlashTiered = isGemini3FlashTieredModel(modelWithoutQuota);
   
   let antigravityModel = modelWithoutQuota;
   if (skipAlias) {
     if (isGemini3Pro && !tier && !isImageModel) {
       antigravityModel = `${modelWithoutQuota}-low`;
+    } else if (isGemini3FlashTiered) {
+      const cleanBase = baseName.replace(/-tiered$/i, "");
+      antigravityModel = `${cleanBase}-tiered`;
     } else if (isGemini3Flash && tier) {
       antigravityModel = baseName;
     }
   }
 
-  const actualModel = skipAlias
+  const actualModel = (isGemini3FlashTiered && quotaPreference === "antigravity")
+    ? `${baseName.replace(/-tiered$/i, "")}-tiered`
+    : skipAlias
     ? antigravityModel
     : MODEL_ALIASES[modelWithoutQuota] || MODEL_ALIASES[baseName] || baseName;
 
@@ -340,6 +369,7 @@ export function resolveModelForHeaderStyle(
   if (headerStyle === "gemini-cli") {
     let transformedModel = requestedModel
       .replace(/^antigravity-/i, "")
+      .replace(/-tiered$/i, "")
       .replace(/-(low|medium|high)$/i, "");
 
     const hasPreviewSuffix = /-preview($|-)/i.test(transformedModel);
@@ -348,7 +378,7 @@ export function resolveModelForHeaderStyle(
     }
     
     return {
-      ...resolveModelWithTier(transformedModel),
+      ...resolveModelWithTier(transformedModel, { cli_first: true }),
       quotaPreference: "gemini-cli",
     };
   }

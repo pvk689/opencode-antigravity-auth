@@ -1,16 +1,19 @@
 # Antigravity + Gemini CLI OAuth Plugin for Opencode
 
-[![npm version](https://img.shields.io/npm/v/opencode-antigravity-auth.svg)](https://www.npmjs.com/package/opencode-antigravity-auth)
-[![npm beta](https://img.shields.io/npm/v/opencode-antigravity-auth/beta.svg?label=beta)](https://www.npmjs.com/package/opencode-antigravity-auth)
-[![npm downloads](https://img.shields.io/npm/dw/opencode-antigravity-auth.svg)](https://www.npmjs.com/package/opencode-antigravity-auth)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![X (Twitter)](https://img.shields.io/badge/X-@dopesalmon-000000?style=flat&logo=x)](https://x.com/dopesalmon)
+> **Forked & Enhanced**: [pvk689/opencode-antigravity-auth](https://github.com/pvk689/opencode-antigravity-auth) (originally by [NoeFabris](https://github.com/NoeFabris/opencode-antigravity-auth)).  
+> Fully synchronized with Google's **Antigravity CLI (`agy`)**: updated OAuth scopes, `daily-cloudcode-pa.googleapis.com` live backend, direct token import from `~/.gemini/jetski-standalone-oauth-token`, and support for Gemini 3.8/3.7 Flash Tiered & GPT-OSS 120B Medium.
 
-Enable Opencode to authenticate against **Antigravity** (Google's IDE) via OAuth so you can use Antigravity rate limits and access models like `gemini-3.1-pro` and `claude-opus-4-6-thinking` with your Google credentials.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Enable Opencode to authenticate against **Antigravity** (Google's IDE & CLI) via OAuth so you can use Antigravity rate limits and access models like `gemini-3.8-flash`, `gemini-3.1-pro`, `gpt-oss-120b-medium`, and `claude-opus-4-6-thinking` with your Google credentials.
 
 ## What You Get
 
+- **Full Antigravity CLI (`agy`) Compatibility** — seamless credential sharing with `~/.gemini`
+- **Instant Token Import** — import existing sessions from Antigravity CLI without browser re-authentication
+- **Gemini 3.8 / 3.7 / 3.6 Flash Tiered & GPT-OSS 120B** — support for newest models via Cloud Code PA API
 - **Claude Opus 4.6, Sonnet 4.6** and **Gemini 3.1 Pro/Flash** via Google OAuth
+- **Fixed `UNSUPPORTED_CLIENT` 400 error** on individual consumer Google accounts
 - **Multi-account support** — add multiple Google accounts, auto-rotates when rate-limited
 - **Dual quota system** — access both Antigravity and Gemini CLI quotas from one plugin
 - **Thinking models** — extended thinking for Claude and Gemini 3 with configurable budgets
@@ -46,7 +49,7 @@ Enable Opencode to authenticate against **Antigravity** (Google's IDE) via OAuth
 Paste this into any LLM agent (Claude Code, OpenCode, Cursor, etc.):
 
 ```
-Install the opencode-antigravity-auth plugin and add the Antigravity model definitions to ~/.config/opencode/opencode.json by following: https://raw.githubusercontent.com/NoeFabris/opencode-antigravity-auth/dev/README.md
+Install the opencode-antigravity-auth plugin and add the Antigravity model definitions to ~/.config/opencode/opencode.json by following: https://raw.githubusercontent.com/pvk689/opencode-antigravity-auth/main/README.md
 ```
 
 **Option B: Manual setup**
@@ -112,9 +115,12 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 
 | Model | Variants | Notes |
 |-------|----------|-------|
+| `antigravity-gemini-3.8-flash` | minimal, low, medium, high | Gemini 3.8 Flash Tiered with thinking |
+| `antigravity-gemini-3.7-flash` | minimal, low, medium, high | Gemini 3.7 Flash Tiered with thinking |
+| `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
 | `antigravity-gemini-3-pro` | low, high | Gemini 3 Pro with thinking |
 | `antigravity-gemini-3.1-pro` | low, high | Gemini 3.1 Pro with thinking (rollout-dependent) |
-| `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
+| `gpt-oss-120b-medium` | — | GPT-OSS 120B Medium (Antigravity CCPA) |
 | `antigravity-claude-sonnet-4-6` | — | Claude Sonnet 4.6 |
 | `antigravity-claude-opus-4-6-thinking` | low, max | Claude Opus 4.6 with extended thinking |
 
@@ -134,7 +140,7 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 > - **CLI-first (`cli_first: true`):** Gemini models use Gemini CLI quota first.
 > - When a Gemini quota pool is exhausted, the plugin automatically falls back to the other pool.
 > - Claude and image models always use Antigravity.
-> Model names are automatically transformed for the target API (e.g., `antigravity-gemini-3-flash` → `gemini-3-flash-preview` for CLI).
+> Model names are automatically transformed for the target API (e.g., `antigravity-gemini-3-flash` → `gemini-3-flash-preview` for CLI, or `gemini-3.8-flash` → `gemini-3.8-flash-tiered` for Antigravity).
 
 **Using variants:**
 ```bash
@@ -155,6 +161,39 @@ Add this to your `~/.config/opencode/opencode.json`:
   "provider": {
     "google": {
       "models": {
+        "antigravity-gemini-3.8-flash": {
+          "name": "Gemini 3.8 Flash (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-gemini-3.7-flash": {
+          "name": "Gemini 3.7 Flash (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-gemini-3-flash": {
+          "name": "Gemini 3 Flash (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
         "antigravity-gemini-3-pro": {
           "name": "Gemini 3 Pro (Antigravity)",
           "limit": { "context": 1048576, "output": 65535 },
@@ -173,16 +212,10 @@ Add this to your `~/.config/opencode/opencode.json`:
             "high": { "thinkingLevel": "high" }
           }
         },
-        "antigravity-gemini-3-flash": {
-          "name": "Gemini 3 Flash (Antigravity)",
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
-          "variants": {
-            "minimal": { "thinkingLevel": "minimal" },
-            "low": { "thinkingLevel": "low" },
-            "medium": { "thinkingLevel": "medium" },
-            "high": { "thinkingLevel": "high" }
-          }
+        "gpt-oss-120b-medium": {
+          "name": "GPT-OSS 120B Medium (Antigravity)",
+          "limit": { "context": 131072, "output": 8192 },
+          "modalities": { "input": ["text"], "output": ["text"] }
         },
         "antigravity-claude-sonnet-4-6": {
           "name": "Claude Sonnet 4.6 (Antigravity)",
@@ -389,7 +422,7 @@ This usually means an MCP tool name starts with a number (for example, a 1mcp ke
 **Diagnosis:**
 1. Disable all MCP servers in your config
 2. Enable one-by-one until error reappears
-3. Report the specific MCP in a [GitHub issue](https://github.com/NoeFabris/opencode-antigravity-auth/issues)
+3. Report the specific MCP in a [GitHub issue](https://github.com/pvk689/opencode-antigravity-auth/issues)
 
 ---
 
@@ -581,7 +614,7 @@ Create `~/.config/opencode/antigravity.json` for optional settings:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/NoeFabris/opencode-antigravity-auth/main/assets/antigravity.schema.json"
+  "$schema": "https://raw.githubusercontent.com/pvk689/opencode-antigravity-auth/main/assets/antigravity.schema.json"
 }
 ```
 

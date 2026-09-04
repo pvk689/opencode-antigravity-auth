@@ -12,11 +12,15 @@ export const ANTIGRAVITY_CLIENT_SECRET = "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";
  * Scopes required for Antigravity integrations.
  */
 export const ANTIGRAVITY_SCOPES: readonly string[] = [
+  "openid",
+  "email",
+  "profile",
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
   "https://www.googleapis.com/auth/cclog",
   "https://www.googleapis.com/auth/experimentsandconfigs",
+  "https://www.googleapis.com/auth/aicode",
 ];
 
 /**
@@ -26,30 +30,30 @@ export const ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 
 /**
  * Root endpoints for the Antigravity API (in fallback order).
- * CLIProxy and Vibeproxy use the daily sandbox endpoint first,
- * then fallback to autopush and prod if needed.
+ * Antigravity CLI uses daily-cloudcode-pa.googleapis.com as primary endpoint.
  */
-export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com";
+export const ANTIGRAVITY_ENDPOINT_DAILY_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
 
 /**
- * Endpoint fallback order (daily → autopush → prod).
- * Shared across request handling and project discovery to mirror CLIProxy behavior.
+ * Endpoint fallback order (daily → prod → sandbox → autopush).
  */
 export const ANTIGRAVITY_ENDPOINT_FALLBACKS = [
   ANTIGRAVITY_ENDPOINT_DAILY,
-  ANTIGRAVITY_ENDPOINT_AUTOPUSH,
   ANTIGRAVITY_ENDPOINT_PROD,
+  ANTIGRAVITY_ENDPOINT_DAILY_SANDBOX,
+  ANTIGRAVITY_ENDPOINT_AUTOPUSH,
 ] as const;
 
 /**
- * Preferred endpoint order for project discovery (prod first, then fallbacks).
- * loadCodeAssist appears to be best supported on prod for managed project resolution.
+ * Preferred endpoint order for project discovery.
  */
 export const ANTIGRAVITY_LOAD_ENDPOINTS = [
-  ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_ENDPOINT_DAILY,
+  ANTIGRAVITY_ENDPOINT_PROD,
+  ANTIGRAVITY_ENDPOINT_DAILY_SANDBOX,
   ANTIGRAVITY_ENDPOINT_AUTOPUSH,
 ] as const;
 

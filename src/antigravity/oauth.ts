@@ -129,12 +129,12 @@ async function fetchWithTimeout(
   }
 }
 
-async function fetchProjectID(accessToken: string): Promise<string> {
+export async function fetchProjectID(accessToken: string): Promise<string> {
   const errors: string[] = [];
   const loadHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
-    "User-Agent": GEMINI_CLI_HEADERS["User-Agent"],
+    "User-Agent": getAntigravityHeaders()["User-Agent"],
     "Client-Metadata": getAntigravityHeaders()["Client-Metadata"],
   };
 
