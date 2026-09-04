@@ -6,7 +6,7 @@
     "types": "./dist/index.d.ts",
     "type": "module",
     "license": "MIT",
-    "author": "noefabris",
+    "author": "pvk689",
     "repository": {
         "type": "git",
         "url": "git+https://github.com/pvk689/opencode-antigravity-auth.git"
