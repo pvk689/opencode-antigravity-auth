@@ -783,6 +783,84 @@ describe("AccountManager", () => {
       });
     });
 
+    describe("hybrid strategy Gemini dual-pool", () => {
+      const flashModel = "gemini-3.8-flash";
+      const proModel = "gemini-3-pro";
+
+      function twoGeminiAccounts(geminiIndex = 0): AccountStorageV4 {
+        return {
+          version: 4,
+          accounts: [
+            { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+            { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+          ],
+          activeIndex: geminiIndex,
+          activeIndexByFamily: { claude: 0, gemini: geminiIndex },
+        };
+      }
+
+      it("skips Antigravity-limited account for Flash and picks one with Antigravity left", () => {
+        const manager = new AccountManager(undefined, twoGeminiAccounts(0));
+        const accounts = manager.getAccounts();
+        manager.markRateLimited(accounts[0]!, 60_000, "gemini", "antigravity", flashModel);
+
+        const selected = manager.getCurrentOrNextForFamily(
+          "gemini",
+          flashModel,
+          "hybrid",
+          "antigravity",
+        );
+
+        expect(selected?.index).toBe(1);
+      });
+
+      it("still selects Antigravity-limited account when requesting Gemini CLI", () => {
+        const manager = new AccountManager(undefined, twoGeminiAccounts(0));
+        const accounts = manager.getAccounts();
+        manager.markRateLimited(accounts[0]!, 60_000, "gemini", "antigravity", flashModel);
+
+        const selected = manager.getCurrentOrNextForFamily(
+          "gemini",
+          flashModel,
+          "hybrid",
+          "gemini-cli",
+        );
+
+        expect(selected?.index).toBe(0);
+      });
+
+      it("returns null for Antigravity when every account is Antigravity-limited", () => {
+        const manager = new AccountManager(undefined, twoGeminiAccounts(0));
+        const accounts = manager.getAccounts();
+        manager.markRateLimited(accounts[0]!, 60_000, "gemini", "antigravity", flashModel);
+        manager.markRateLimited(accounts[1]!, 60_000, "gemini", "antigravity", flashModel);
+
+        const selected = manager.getCurrentOrNextForFamily(
+          "gemini",
+          flashModel,
+          "hybrid",
+          "antigravity",
+        );
+
+        expect(selected).toBeNull();
+      });
+
+      it("does not treat Flash Antigravity limit as blocking Pro on the same account", () => {
+        const manager = new AccountManager(undefined, twoGeminiAccounts(0));
+        const accounts = manager.getAccounts();
+        manager.markRateLimited(accounts[0]!, 60_000, "gemini", "antigravity", flashModel);
+
+        const selected = manager.getCurrentOrNextForFamily(
+          "gemini",
+          proModel,
+          "hybrid",
+          "antigravity",
+        );
+
+        expect(selected?.index).toBe(0);
+      });
+    });
+
     describe("hybrid strategy with token bucket", () => {
       it("returns account based on health and token availability", () => {
         const stored: AccountStorageV4 = {
