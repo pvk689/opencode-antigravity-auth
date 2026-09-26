@@ -169,7 +169,7 @@ async function triggerAsyncQuotaRefreshForAccount(
   }
 }
 
-function trackWarmupAttempt(sessionId: string): boolean {
+export function trackWarmupAttempt(sessionId: string): boolean {
   if (warmupSucceededSessionIds.has(sessionId)) {
     return false;
   }
@@ -192,7 +192,7 @@ function getWarmupAttemptCount(sessionId: string): number {
   return warmupAttemptedSessionIds.has(sessionId) ? 1 : 0;
 }
 
-function markWarmupSuccess(sessionId: string): void {
+export function markWarmupSuccess(sessionId: string): void {
   warmupSucceededSessionIds.add(sessionId);
   if (warmupSucceededSessionIds.size >= MAX_WARMUP_SESSIONS) {
     const first = warmupSucceededSessionIds.values().next().value;
@@ -200,7 +200,7 @@ function markWarmupSuccess(sessionId: string): void {
   }
 }
 
-function clearWarmupAttempt(sessionId: string): void {
+export function clearWarmupAttempt(sessionId: string): void {
   warmupAttemptedSessionIds.delete(sessionId);
 }
 
@@ -3422,7 +3422,7 @@ export function toUrlString(value: RequestInfo): string {
   return value.toString();
 }
 
-function toWarmupStreamUrl(value: RequestInfo): string {
+export function toWarmupStreamUrl(value: RequestInfo): string {
   const urlString = toUrlString(value);
   try {
     const url = new URL(urlString);

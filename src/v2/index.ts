@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin";
-import { initV2AccountManager, setV2Config } from "./auth";
+import { initV2AccountManager, setV2Config, getV2AccountManager } from "./auth";
 import { registerEventHandlers } from "./events";
 import { registerAntigravityIntegration } from "./integration";
 import { registerAntigravityModels } from "./models";
@@ -8,8 +8,10 @@ import { registerSearchTool } from "./tool";
 import { loadConfig, initRuntimeConfig } from "../plugin/config";
 import { initializeDebug } from "../plugin/debug";
 import { initDiskSignatureCache } from "../plugin/cache";
+import { createProactiveRefreshQueue } from "../plugin/refresh-queue";
 import { initHealthTracker, initTokenTracker } from "../plugin/rotation";
 import { initAntigravityVersion } from "../plugin/version";
+import { V2_PROVIDER_ID } from "./constants";
 
 /**
  * OpenCode v2 (opencode2) entrypoint for opencode-antigravity-auth.
@@ -82,12 +84,25 @@ export default Plugin.define({
     await registerSearchTool(ctx);
     const disposeEvents = await registerEventHandlers(ctx, config, directory);
 
+    let stopRefreshQueue: (() => void) | undefined;
+    if (config.proactive_token_refresh) {
+      const refreshQueue = createProactiveRefreshQueue(null, V2_PROVIDER_ID, {
+        enabled: config.proactive_token_refresh,
+        bufferSeconds: config.proactive_refresh_buffer_seconds,
+        checkIntervalSeconds: config.proactive_refresh_check_interval_seconds,
+      });
+      refreshQueue.setAccountManager(getV2AccountManager());
+      refreshQueue.start();
+      stopRefreshQueue = () => refreshQueue.stop();
+    }
+
     await ctx.storage.set("v2.loaded", {
       version: ctx.app.version,
       loadedAt: new Date().toISOString(),
     });
 
     return () => {
+      stopRefreshQueue?.();
       disposeEvents();
     };
   },

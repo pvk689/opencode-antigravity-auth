@@ -30,10 +30,12 @@ import {
   isEmptyResponseBody,
 } from "../plugin/request-helpers";
 import {
+  buildThinkingWarmupBody,
   isGenerativeLanguageRequest,
   prepareAntigravityRequest,
   transformAntigravityResponse,
 } from "../plugin/request";
+import { checkAccountsQuota } from "../plugin/quota";
 import { AntigravityTokenRefreshError, refreshAccessToken } from "../plugin/token";
 import { ensureProjectContext } from "../plugin/project";
 import { getHealthTracker, getTokenTracker } from "../plugin/rotation";
@@ -41,6 +43,7 @@ import type { OAuthAuthDetails, ProjectContextResult } from "../plugin/types";
 import {
   FIRST_RETRY_DELAY_MS,
   SWITCH_ACCOUNT_DELAY_MS,
+  clearWarmupAttempt,
   extractModelFromUrl,
   extractRetryInfoFromBody,
   extractVerificationErrorDetails,
@@ -48,6 +51,7 @@ import {
   getModelFamilyFromUrl,
   getRateLimitBackoff,
   headerStyleToQuotaKey,
+  markWarmupSuccess,
   resetAccountFailureState,
   resetRateLimitState,
   resolveHeaderRoutingDecision,
@@ -55,15 +59,15 @@ import {
   retryAfterMsFromResponse,
   sleep,
   toUrlString,
+  toWarmupStreamUrl,
   trackAccountFailure,
+  trackWarmupAttempt,
 } from "../plugin";
 import { getV2AccountManager, getV2Config } from "./auth";
 import { V2_PROVIDER_ID } from "./constants";
 import { createLogger } from "../plugin/logger";
 
 const log = createLogger("v2-request");
-
-const TIER_SUFFIX_REGEX = /-(minimal|low|medium|high|max)$/;
 
 let attemptSequence = 0;
 
@@ -191,8 +195,19 @@ function lookupAttempt(request: Request, sessionID: string, modelId: string): St
  * already carry a tier suffix. Mirrors the V1 URL shape (`...-high`) that
  * `prepareAntigravityRequest` resolves thinking levels from.
  */
+/**
+ * V2 uses built-in default variant ids ("default", and "none" on some models)
+ * when the user selects no variant. Those are NOT thinking tiers and must never
+ * be appended: doing so produced `gemini-3.8-flash-default-tiered`, which Google
+ * answers with 429 "Resource exhausted" while the account quota is intact
+ * (verified: agy on the same account succeeds at the same time).
+ */
+const NOOP_VARIANTS = new Set(["default", "none"]);
+
+const TIER_LIKE_SUFFIX_REGEX = /-(minimal|low|medium|high|max|default|none)$/;
+
 export function applyVariantSuffix(urlString: string, urlModel: string | null, variant: string | undefined): string {
-  if (!variant || !urlModel || TIER_SUFFIX_REGEX.test(urlModel)) {
+  if (!variant || NOOP_VARIANTS.has(variant) || !urlModel || TIER_LIKE_SUFFIX_REGEX.test(urlModel)) {
     return urlString;
   }
   const needle = `/models/${urlModel}`;
@@ -448,6 +463,125 @@ function resolveHeaderStyleForAccount(
   return { headerStyle, switchAccount: true };
 }
 
+export const quotaRefreshInProgress = new Set<string>();
+
+/**
+ * Best-effort background quota cache refresh after a successful request.
+ * Mirrors V1's triggerAsyncQuotaRefreshForAccount (fire-and-forget, interval
+ * gated, deduplicated). The V1 client argument is unnecessary: quota checks
+ * only need it for token refresh, whose client parameter is now optional.
+ */
+function triggerBackgroundQuotaRefresh(
+  accountManager: AccountManager,
+  accountIndex: number,
+): void {
+  const config = getV2Config();
+  const intervalMinutes = config.quota_refresh_interval_minutes;
+  if (!intervalMinutes || intervalMinutes <= 0) {
+    return;
+  }
+  const account = accountManager.getAccounts().find((a) => a.index === accountIndex);
+  if (!account || account.enabled === false) {
+    return;
+  }
+  const key = account.email ?? `idx-${accountIndex}`;
+  if (quotaRefreshInProgress.has(key)) {
+    return;
+  }
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const age =
+    account.cachedQuotaUpdatedAt != null ? Date.now() - account.cachedQuotaUpdatedAt : Infinity;
+  if (age < intervalMs) {
+    return;
+  }
+  quotaRefreshInProgress.add(key);
+  void (async () => {
+    try {
+      const metas = accountManager.getAccountsForQuotaCheck();
+      const meta = metas[accountIndex];
+      if (!meta) {
+        return;
+      }
+      const results = await checkAccountsQuota([meta], null, V2_PROVIDER_ID);
+      if (results[0]?.status === "ok" && results[0]?.quota?.groups) {
+        accountManager.updateQuotaCache(accountIndex, results[0].quota.groups);
+        accountManager.requestSaveToDisk();
+      }
+    } catch (error) {
+      log.debug("background-quota-refresh-failed", { key, error: String(error) });
+    } finally {
+      quotaRefreshInProgress.delete(key);
+    }
+  })();
+}
+
+/**
+ * Best-effort thinking-signature warmup for Claude thinking sessions.
+ * Mirrors V1's runThinkingWarmup (single attempt per session, failures ignored).
+ */
+async function runThinkingWarmup(
+  prepared: ReturnType<typeof prepareAntigravityRequest>,
+  projectId: string,
+): Promise<void> {
+  if (!prepared.needsSignedThinkingWarmup || !prepared.sessionId) {
+    return;
+  }
+  if (!trackWarmupAttempt(prepared.sessionId)) {
+    return;
+  }
+  const warmupBody = buildThinkingWarmupBody(
+    typeof prepared.init.body === "string" ? prepared.init.body : undefined,
+    Boolean(
+      prepared.effectiveModel?.toLowerCase().includes("claude") &&
+        prepared.effectiveModel?.toLowerCase().includes("thinking"),
+    ),
+  );
+  if (!warmupBody) {
+    return;
+  }
+  const warmupUrl = toWarmupStreamUrl(prepared.request);
+  const warmupHeaders = new Headers(prepared.init.headers ?? {});
+  warmupHeaders.set("accept", "text/event-stream");
+  const warmupInit: RequestInit = {
+    ...prepared.init,
+    method: prepared.init.method ?? "POST",
+    headers: warmupHeaders,
+    body: warmupBody,
+  };
+  const warmupDebugContext = startAntigravityDebugRequest({
+    originalUrl: warmupUrl,
+    resolvedUrl: warmupUrl,
+    method: warmupInit.method,
+    headers: warmupHeaders,
+    body: warmupBody,
+    streaming: true,
+    projectId,
+  });
+  try {
+    log.debug("thinking-warmup-start", { sessionId: prepared.sessionId });
+    const warmupResponse = await fetch(warmupUrl, warmupInit);
+    const transformed = await transformAntigravityResponse(
+      warmupResponse,
+      true,
+      warmupDebugContext,
+      prepared.requestedModel,
+      projectId,
+      warmupUrl,
+      prepared.effectiveModel,
+      prepared.sessionId,
+    );
+    await transformed.text();
+    markWarmupSuccess(prepared.sessionId);
+    log.debug("thinking-warmup-done", { sessionId: prepared.sessionId });
+  } catch (error) {
+    clearWarmupAttempt(prepared.sessionId);
+    log.debug("thinking-warmup-failed", {
+      sessionId: prepared.sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function handleHttpRequest(event: {
   request: Request;
   sessionID: string;
@@ -467,10 +601,9 @@ export async function handleHttpRequest(event: {
   const urlModel = extractModelFromUrl(urlString);
   const variant = typeof event.model.variant === "string" ? event.model.variant : undefined;
   let model = urlModel;
-  const effectiveUrl =
-    variant && urlModel && !TIER_SUFFIX_REGEX.test(urlModel)
-      ? applyVariantSuffix(urlString, urlModel, variant)
-      : urlString;
+  // applyVariantSuffix decides internally (skips built-in default variants and
+  // already-suffixed models).
+  const effectiveUrl = applyVariantSuffix(urlString, urlModel, variant);
   if (effectiveUrl !== urlString) {
     model = extractModelFromUrl(effectiveUrl);
   }
@@ -631,6 +764,8 @@ async function handleHttpRequestWithAccount(
     streaming: prepared.streaming,
     projectId,
   });
+
+  await runThinkingWarmup(prepared, projectId);
 
   const id = `ag-${Date.now().toString(36)}-${(attemptSequence += 1).toString(36)}`;
   // NOTE: no correlation header is set here on purpose (agy parity — prepare's
@@ -1129,6 +1264,7 @@ async function runRotation(stored: StoredAttempt, firstResponse: Response): Prom
       active.consecutiveFailures = 0;
       getHealthTracker().recordSuccess(active.index);
       accountManager.markAccountUsed(active.index);
+      triggerBackgroundQuotaRefresh(accountManager, active.index);
     }
 
     logAntigravityDebugResponse(debugContext, current, {

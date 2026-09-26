@@ -25,4 +25,9 @@ describe("applyVariantSuffix", () => {
     expect(applyVariantSuffix(URL, "antigravity-gemini-3.8-flash", undefined)).toBe(URL);
     expect(applyVariantSuffix(URL, null, "high")).toBe(URL);
   });
+
+  it("never appends built-in default variants (would forge invalid -default-tiered models)", () => {
+    expect(applyVariantSuffix(URL, "antigravity-gemini-3.8-flash", "default")).toBe(URL);
+    expect(applyVariantSuffix(URL, "antigravity-gemini-3.8-flash", "none")).toBe(URL);
+  });
 });

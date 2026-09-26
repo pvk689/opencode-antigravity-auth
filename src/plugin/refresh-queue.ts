@@ -20,6 +20,7 @@ import type { AccountManager, ManagedAccount } from "./accounts";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import { refreshAccessToken } from "./token";
 import { createLogger } from "./logger";
+import { ANTIGRAVITY_PROVIDER_ID } from "../constants";
 
 const log = createLogger("refresh-queue");
 
@@ -60,7 +61,7 @@ interface RefreshQueueState {
  */
 export class ProactiveRefreshQueue {
   private readonly config: ProactiveRefreshConfig;
-  private readonly client: PluginClient;
+  private readonly client: PluginClient | null;
   private readonly providerId: string;
   private accountManager: AccountManager | null = null;
   
@@ -75,12 +76,12 @@ export class ProactiveRefreshQueue {
   };
 
   constructor(
-    client: PluginClient,
-    providerId: string,
+    client?: PluginClient | null,
+    providerId?: string,
     config?: Partial<ProactiveRefreshConfig>,
   ) {
-    this.client = client;
-    this.providerId = providerId;
+    this.client = client ?? null;
+    this.providerId = providerId ?? ANTIGRAVITY_PROVIDER_ID;
     this.config = {
       ...DEFAULT_PROACTIVE_REFRESH_CONFIG,
       ...config,
@@ -315,8 +316,8 @@ export class ProactiveRefreshQueue {
  * Create a proactive refresh queue instance.
  */
 export function createProactiveRefreshQueue(
-  client: PluginClient,
-  providerId: string,
+  client?: PluginClient | null,
+  providerId?: string,
   config?: Partial<ProactiveRefreshConfig>,
 ): ProactiveRefreshQueue {
   return new ProactiveRefreshQueue(client, providerId, config);

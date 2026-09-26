@@ -309,7 +309,7 @@ function applyAccountUpdates(account: AccountMetadataV3, auth: OAuthAuthDetails)
 
 export async function checkAccountsQuota(
   accounts: AccountMetadataV3[],
-  client: PluginClient,
+  client?: PluginClient | null,
   providerId = ANTIGRAVITY_PROVIDER_ID,
 ): Promise<AccountQuotaResult[]> {
   const results: AccountQuotaResult[] = [];
