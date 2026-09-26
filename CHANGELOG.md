@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **OpenCode V2 (opencode2) support** - Dual entrypoint: the package default-exports `Plugin.define({ id: "antigravity-auth", ... })` from `@opencode/plugin@2.0.18` while keeping the V1 named exports untouched.
+  - `antigravity-oauth` method on the builtin `google` integration (browser auto-callback with manual-code fallback, token refresh, email label).
+  - Antigravity model inventory (`google/antigravity-*`, Gemini CLI previews) registered via provider transform.
+  - Request pipeline via `http.request` (Antigravity rewrite) + `http.response` (multi-account rotation, capacity backoff, Antigravity↔Gemini-CLI quota fallback, verification handling, thinking-recovery retry, response shaping).
+  - `google_search` tool and event subscription (child-session tracking, log-only update check).
+  - Deviations from V1 (no TUI toast channel in V2 Promise API): toasts route to the structured logger; thinking-warmup pre-request, background quota refresh, proactive refresh queue, and the `session.error` recovery flow are deferred.
+
 ## [1.6.0] - 2026-02-20
 
 ### Fixed

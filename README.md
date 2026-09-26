@@ -6,6 +6,8 @@
 Google Antigravity IDE & CLI OAuth authentication plugin for [OpenCode](https://opencode.ai).  
 Access **Claude 4.6 (Opus & Sonnet)**, **Gemini 3.8 / 3.7 / 3.1 (Pro & Flash Tiered)**, and **GPT-OSS 120B** using your Google credentials with Antigravity rate limits and multi-account rotation.
 
+> **OpenCode V2 (opencode2) support:** this package ships a dual entrypoint. OpenCode v1 uses the named exports (`AntigravityCLIOAuthPlugin`); OpenCode v2 (`2.x`) loads the default export (`antigravity-auth`: OAuth login on the `google` integration, Antigravity model inventory, request rotation/quota fallback, `google_search` tool). V1 behavior is unchanged.
+
 ---
 
 ## 🚀 Key Features

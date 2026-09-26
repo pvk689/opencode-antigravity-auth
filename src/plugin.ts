@@ -239,7 +239,7 @@ function isRemoteEnvironment(): boolean {
   return false;
 }
 
-function shouldSkipLocalServer(): boolean {
+export function shouldSkipLocalServer(): boolean {
   return isWSL2() || isRemoteEnvironment();
 }
 
@@ -316,7 +316,7 @@ function selectBestVerificationUrl(urls: string[]): string | undefined {
   return unique[0];
 }
 
-function extractVerificationErrorDetails(bodyText: string): {
+export function extractVerificationErrorDetails(bodyText: string): {
   validationRequired: boolean;
   message?: string;
   verifyUrl?: string;
@@ -679,9 +679,9 @@ async function promptOAuthCallbackValue(message: string): Promise<string> {
   }
 }
 
-type OAuthCallbackParams = { code: string; state: string };
+export type OAuthCallbackParams = { code: string; state: string };
 
-function getStateFromAuthorizationUrl(authorizationUrl: string): string {
+export function getStateFromAuthorizationUrl(authorizationUrl: string): string {
   try {
     return new URL(authorizationUrl).searchParams.get("state") ?? "";
   } catch {
@@ -689,7 +689,7 @@ function getStateFromAuthorizationUrl(authorizationUrl: string): string {
   }
 }
 
-function extractOAuthCallbackParams(url: URL): OAuthCallbackParams | null {
+export function extractOAuthCallbackParams(url: URL): OAuthCallbackParams | null {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   if (!code || !state) {
@@ -698,7 +698,7 @@ function extractOAuthCallbackParams(url: URL): OAuthCallbackParams | null {
   return { code, state };
 }
 
-function parseOAuthCallbackInput(
+export function parseOAuthCallbackInput(
   value: string,
   fallbackState: string,
 ): OAuthCallbackParams | { error: string } {
@@ -754,7 +754,7 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
-async function persistAccountPool(
+export async function persistAccountPool(
   results: Array<Extract<AntigravityTokenExchangeResult, { type: "success" }>>,
   replaceAll: boolean = false,
 ): Promise<void> {
@@ -880,7 +880,7 @@ function buildAuthSuccessFromStoredAccount(account: {
   };
 }
 
-function retryAfterMsFromResponse(response: Response, defaultRetryMs: number = 60_000): number {
+export function retryAfterMsFromResponse(response: Response, defaultRetryMs: number = 60_000): number {
   const retryAfterMsHeader = response.headers.get("retry-after-ms");
   if (retryAfterMsHeader) {
     const parsed = Number.parseInt(retryAfterMsHeader, 10);
@@ -943,7 +943,7 @@ function parseDurationToMs(duration: string): number | null {
   return matchFound ? totalMs : null;
 }
 
-interface RateLimitBodyInfo {
+export interface RateLimitBodyInfo {
   retryDelayMs: number | null;
   message?: string;
   quotaResetTime?: string;
@@ -1022,7 +1022,7 @@ function extractRateLimitBodyInfo(body: unknown): RateLimitBodyInfo {
   return { retryDelayMs: null, message, reason };
 }
 
-async function extractRetryInfoFromBody(response: Response): Promise<RateLimitBodyInfo> {
+export async function extractRetryInfoFromBody(response: Response): Promise<RateLimitBodyInfo> {
   try {
     const text = await response.clone().text();
     try {
@@ -1036,7 +1036,7 @@ async function extractRetryInfoFromBody(response: Response): Promise<RateLimitBo
   }
 }
 
-function formatWaitTime(ms: number): string {
+export function formatWaitTime(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const seconds = Math.ceil(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -1051,8 +1051,8 @@ function formatWaitTime(ms: number): string {
 }
 
 // Progressive rate limit retry delays
-const FIRST_RETRY_DELAY_MS = 1000;      // 1s - first 429 quick retry on same account
-const SWITCH_ACCOUNT_DELAY_MS = 5000;   // 5s - delay before switching to another account
+export const FIRST_RETRY_DELAY_MS = 1000;      // 1s - first 429 quick retry on same account
+export const SWITCH_ACCOUNT_DELAY_MS = 5000;   // 5s - delay before switching to another account
 
 /**
  * Rate limit state tracking with time-window deduplication.
@@ -1088,7 +1088,7 @@ const emptyResponseAttempts = new Map<string, number>();
  * @param maxBackoffMs - Maximum backoff delay in milliseconds (default 60000)
  * @returns { attempt, delayMs, isDuplicate } - isDuplicate=true if within dedup window
  */
-function getRateLimitBackoff(
+export function getRateLimitBackoff(
   accountIndex: number, 
   quotaKey: string,
   serverRetryAfterMs: number | null,
@@ -1130,7 +1130,7 @@ function getRateLimitBackoff(
  * Reset rate limit state for an account+quota combination.
  * Only resets the specific quota, not all quotas for the account.
  */
-function resetRateLimitState(accountIndex: number, quotaKey: string): void {
+export function resetRateLimitState(accountIndex: number, quotaKey: string): void {
   const stateKey = `${accountIndex}:${quotaKey}`;
   rateLimitStateByAccountQuota.delete(stateKey);
 }
@@ -1147,7 +1147,7 @@ function resetAllRateLimitStateForAccount(accountIndex: number): void {
   }
 }
 
-function headerStyleToQuotaKey(headerStyle: HeaderStyle, family: ModelFamily): string {
+export function headerStyleToQuotaKey(headerStyle: HeaderStyle, family: ModelFamily): string {
   if (family === "claude") return "claude";
   return headerStyle === "antigravity" ? "gemini-antigravity" : "gemini-cli";
 }
@@ -1158,7 +1158,7 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 const FAILURE_COOLDOWN_MS = 30_000; // 30 seconds cooldown after max failures
 const FAILURE_STATE_RESET_MS = 120_000; // Reset failure count after 2 minutes of no failures
 
-function trackAccountFailure(accountIndex: number): { failures: number; shouldCooldown: boolean; cooldownMs: number } {
+export function trackAccountFailure(accountIndex: number): { failures: number; shouldCooldown: boolean; cooldownMs: number } {
   const now = Date.now();
   const previous = accountFailureState.get(accountIndex);
   
@@ -1175,14 +1175,14 @@ function trackAccountFailure(accountIndex: number): { failures: number; shouldCo
   return { failures, shouldCooldown, cooldownMs };
 }
 
-function resetAccountFailureState(accountIndex: number): void {
+export function resetAccountFailureState(accountIndex: number): void {
   accountFailureState.delete(accountIndex);
 }
 
 /**
  * Sleep for a given number of milliseconds, respecting an abort signal.
  */
-function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted"));
@@ -3411,7 +3411,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 export const AntigravityCLIOAuthPlugin = createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID);
 export const GoogleOAuthPlugin = AntigravityCLIOAuthPlugin;
 
-function toUrlString(value: RequestInfo): string {
+export function toUrlString(value: RequestInfo): string {
   if (typeof value === "string") {
     return value;
   }
@@ -3436,17 +3436,17 @@ function toWarmupStreamUrl(value: RequestInfo): string {
   }
 }
 
-function extractModelFromUrl(urlString: string): string | null {
+export function extractModelFromUrl(urlString: string): string | null {
   const match = urlString.match(/\/models\/([^:\/?]+)(?::\w+)?/);
   return match?.[1] ?? null;
 }
 
-function extractModelFromUrlWithSuffix(urlString: string): string | null {
+export function extractModelFromUrlWithSuffix(urlString: string): string | null {
   const match = urlString.match(/\/models\/([^:\/\?]+)/);
   return match?.[1] ?? null;
 }
 
-function getModelFamilyFromUrl(urlString: string): ModelFamily {
+export function getModelFamilyFromUrl(urlString: string): ModelFamily {
   const model = extractModelFromUrl(urlString);
   let family: ModelFamily = "gemini";
   if (model && model.includes("claude")) {
@@ -3458,7 +3458,7 @@ function getModelFamilyFromUrl(urlString: string): ModelFamily {
   return family;
 }
 
-function resolveQuotaFallbackHeaderStyle(input: {
+export function resolveQuotaFallbackHeaderStyle(input: {
   family: ModelFamily;
   headerStyle: HeaderStyle;
   alternateStyle: HeaderStyle | null;
@@ -3479,7 +3479,7 @@ type HeaderRoutingDecision = {
   allowQuotaFallback: boolean;
 };
 
-function resolveHeaderRoutingDecision(
+export function resolveHeaderRoutingDecision(
   urlString: string,
   family: ModelFamily,
   config: AntigravityConfig,

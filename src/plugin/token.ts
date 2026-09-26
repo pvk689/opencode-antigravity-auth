@@ -84,8 +84,8 @@ export class AntigravityTokenRefreshError extends Error {
  */
 export async function refreshAccessToken(
   auth: OAuthAuthDetails,
-  client: PluginClient,
-  providerId: string,
+  client?: PluginClient | null,
+  providerId?: string,
 ): Promise<OAuthAuthDetails | undefined> {
   const parts = parseRefreshParts(auth.refresh);
   if (!parts.refreshToken) {
