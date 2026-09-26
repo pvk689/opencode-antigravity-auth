@@ -10,48 +10,17 @@ import {
   toneFor,
   type QuotaSnapshot,
   type QuotaTone,
+  type QuotaModelItem,
 } from "./quota";
 
 type TuiContext = Plugin.Context;
 
-const REFRESH_INTERVAL_MS = 120_000;
+// Refresh every 60s for live, active countdowns matching agy
+const REFRESH_INTERVAL_MS = 60_000;
 
 function toneColor(theme: TuiContext["theme"], tone: QuotaTone): string {
   if (tone === "muted") return rgbToHex(theme.text.muted);
   return rgbToHex(theme.text.feedback[tone].base);
-}
-
-function groupRows(snapshotAccount: NonNullable<QuotaSnapshot["accounts"]>[number]): Array<{
-  label: string;
-  remaining?: number;
-  reset?: string;
-}> {
-  const rows: Array<{ label: string; remaining?: number; reset?: string }> = [];
-  const groups = snapshotAccount.quota?.groups;
-  if (groups) {
-    const entries: Array<[string, typeof groups.claude]> = [
-      ["Claude", groups.claude],
-      ["Gemini Pro", groups["gemini-pro"]],
-      ["Gemini Flash", groups["gemini-flash"]],
-    ];
-    for (const [label, summary] of entries) {
-      if (summary) {
-        rows.push({ label, remaining: summary.remainingFraction, reset: summary.resetTime });
-      }
-    }
-  }
-  const cliModels = snapshotAccount.geminiCliQuota?.models ?? [];
-  for (const model of cliModels.slice(0, 3)) {
-    rows.push({
-      label: model.modelId,
-      remaining: model.remainingFraction,
-      reset: model.resetTime,
-    });
-  }
-  if (cliModels.length > 3) {
-    rows.push({ label: `…${cliModels.length - 3} more CLI models` });
-  }
-  return rows;
 }
 
 function QuotaPanelView(props: {
@@ -65,9 +34,7 @@ function QuotaPanelView(props: {
   const base = rgbToHex(theme.text.base);
   const muted = rgbToHex(theme.text.muted);
 
-  // Keymap layers must be created inside a component render (they are owned by
-  // the calling component). Registering from plugin setup breaks owner
-  // attribution ("keymap.provider is missing" from the host).
+  // Keymap layer inside component scope
   props.ctx.keymap.layer(() => ({
     mode: "global",
     commands: [
@@ -83,45 +50,78 @@ function QuotaPanelView(props: {
       },
     ],
   }));
+
   const snap = props.snapshot;
 
   return (
-    <box flexDirection="column">
-      <text fg={base}>Antigravity Quota{props.refreshing ? " …" : ""}</text>
+    <box flexDirection="column" paddingLeft={1} paddingRight={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={base}>⚡ Antigravity Quota</text>
+        <Show when={props.refreshing}>
+          <text fg={muted}>[syncing...]</text>
+        </Show>
+      </box>
+
       <Show
         when={snap}
-        fallback={<text fg={muted}>loading…</text>}
+        fallback={<text fg={muted}>  loading quota data...</text>}
       >
         <Show
           when={!snap!.error && snap!.accounts.length > 0}
           fallback={
             <text fg={snap!.error ? theme.text.feedback.error.base : muted}>
-              {snap!.error ? `quota error` : "No accounts — opencode auth login"}
+              {snap!.error ? `  ! Quota error: ${snap!.error}` : "  No accounts configured"}
             </text>
           }
         >
           <For each={snap!.accounts}>
             {(account) => {
               const dimmed = account.disabled || account.status === "error";
-              const title = `${account.email ?? `Account ${account.index + 1}`}${
-                account.disabled ? " (disabled)" : ""
-              }`;
               return (
-                <box flexDirection="column">
-                  <text fg={dimmed ? muted : base}>{title}</text>
+                <box flexDirection="column" marginTop={1}>
+                  <text fg={dimmed ? muted : base}>
+                    ● {account.email} {account.disabled ? "(disabled)" : ""}
+                  </text>
+                  
                   <Show
                     when={account.status !== "error"}
                     fallback={<text fg={theme.text.feedback.error.base}>  ! {account.error}</text>}
                   >
-                    <For each={groupRows(account)}>
-                      {(row) => (
-                        <text fg={dimmed ? muted : toneColor(theme, toneFor(row.remaining))}>
-                          {"  "}
-                          {row.label.padEnd(14).slice(0, 14)} {quotaBar(row.remaining)}
-                          {formatReset(row.reset)}
-                        </text>
-                      )}
-                    </For>
+                    {/* Antigravity Quota section */}
+                    <Show when={account.antigravityModels.length > 0}>
+                      <text fg={muted}>  ┌ Antigravity Models</text>
+                      <For each={account.antigravityModels}>
+                        {(model: QuotaModelItem, idx) => {
+                          const isLast = idx() === account.antigravityModels.length - 1;
+                          const connector = isLast ? "  └" : "  ├";
+                          const tone = toneFor(model.remainingFraction);
+                          return (
+                            <text fg={dimmed ? muted : toneColor(theme, tone)}>
+                              {connector} {model.name.padEnd(24)} {quotaBar(model.remainingFraction, 10)}
+                              {formatReset(model.resetTime)}
+                            </text>
+                          );
+                        }}
+                      </For>
+                    </Show>
+
+                    {/* Gemini CLI Quota section */}
+                    <Show when={account.geminiCliModels.length > 0}>
+                      <text fg={muted}>  ┌ Gemini CLI Quota</text>
+                      <For each={account.geminiCliModels}>
+                        {(model: QuotaModelItem, idx) => {
+                          const isLast = idx() === account.geminiCliModels.length - 1;
+                          const connector = isLast ? "  └" : "  ├";
+                          const tone = toneFor(model.remainingFraction);
+                          return (
+                            <text fg={dimmed ? muted : toneColor(theme, tone)}>
+                              {connector} {model.name.padEnd(24)} {quotaBar(model.remainingFraction, 10)}
+                              {formatReset(model.resetTime)}
+                            </text>
+                          );
+                        }}
+                      </For>
+                    </Show>
                   </Show>
                 </box>
               );
@@ -134,8 +134,8 @@ function QuotaPanelView(props: {
 }
 
 /**
- * Registers the sidebar quota panel, a manual-refresh palette command, and a
- * refresh on every finished session. Returns the setup cleanup.
+ * Registers the sidebar quota panel, periodic 60s background refresh,
+ * refresh on session.idle, and command palette integration.
  */
 export function setupQuotaSidebar(ctx: TuiContext): () => void {
   const [snapshot, setSnapshot] = createSignal<QuotaSnapshot | null>(null);
@@ -164,7 +164,7 @@ export function setupQuotaSidebar(ctx: TuiContext): () => void {
       title: "Antigravity",
       message:
         count > 0
-          ? `Quota refreshed (${count} account${count === 1 ? "" : "s"})`
+          ? `Quota updated for ${count} account(s)`
           : "No Antigravity accounts",
       variant: "success",
     });
@@ -178,12 +178,13 @@ export function setupQuotaSidebar(ctx: TuiContext): () => void {
       refresh,
       notifyRefreshed: showRefreshToast,
     });
+
   const disposeSlot = ctx.ui.slot({ append: "sidebar.content", render });
 
-  // NOTE: no onMount/onCleanup here — those require a component owner and this
-  // is plugin setup scope. Lifecycle is managed manually via the returned cleanup.
+  // Initial trigger immediately on startup
   void refresh();
 
+  // Periodic automatic sync every 60s
   const timer = setInterval(() => {
     void refresh();
   }, REFRESH_INTERVAL_MS);
