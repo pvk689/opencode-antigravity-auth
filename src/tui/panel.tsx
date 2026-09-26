@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { Plugin } from "@opencode/plugin/tui";
 import { rgbToHex } from "@opentui/core";
@@ -58,10 +58,31 @@ function QuotaPanelView(props: {
   ctx: TuiContext;
   snapshot: QuotaSnapshot | null;
   refreshing: boolean;
+  refresh: () => Promise<void>;
+  notifyRefreshed: () => Promise<void>;
 }): JSX.Element {
   const theme = props.ctx.theme;
   const base = rgbToHex(theme.text.base);
   const muted = rgbToHex(theme.text.muted);
+
+  // Keymap layers must be created inside a component render (they are owned by
+  // the calling component). Registering from plugin setup breaks owner
+  // attribution ("keymap.provider is missing" from the host).
+  props.ctx.keymap.layer(() => ({
+    mode: "global",
+    commands: [
+      {
+        id: "antigravity.quota.refresh",
+        title: "Refresh Antigravity quota",
+        group: "Antigravity",
+        palette: true,
+        run: async () => {
+          await props.refresh();
+          await props.notifyRefreshed();
+        },
+      },
+    ],
+  }));
   const snap = props.snapshot;
 
   return (
@@ -137,46 +158,35 @@ export function setupQuotaSidebar(ctx: TuiContext): () => void {
     void refresh();
   });
 
-  const render = () => QuotaPanelView({ ctx, snapshot: snapshot(), refreshing: refreshing() });
+  const showRefreshToast = async (): Promise<void> => {
+    const count = snapshot()?.accounts.length ?? 0;
+    await ctx.ui.toast.show({
+      title: "Antigravity",
+      message:
+        count > 0
+          ? `Quota refreshed (${count} account${count === 1 ? "" : "s"})`
+          : "No Antigravity accounts",
+      variant: "success",
+    });
+  };
+
+  const render = () =>
+    QuotaPanelView({
+      ctx,
+      snapshot: snapshot(),
+      refreshing: refreshing(),
+      refresh,
+      notifyRefreshed: showRefreshToast,
+    });
   const disposeSlot = ctx.ui.slot({ append: "sidebar.content", render });
 
-  ctx.keymap.layer(() => ({
-    mode: "global",
-    commands: [
-      {
-        id: "antigravity.quota.refresh",
-        title: "Refresh Antigravity quota",
-        group: "Antigravity",
-        palette: true,
-        run: async () => {
-          await refresh();
-          const count = snapshot()?.accounts.length ?? 0;
-          await ctx.ui.toast.show({
-            title: "Antigravity",
-            message:
-              count > 0
-                ? `Quota refreshed (${count} account${count === 1 ? "" : "s"})`
-                : "No Antigravity accounts",
-            variant: "success",
-          });
-        },
-      },
-    ],
-  }));
-
-  onMount(() => {
-    void refresh();
-  });
+  // NOTE: no onMount/onCleanup here — those require a component owner and this
+  // is plugin setup scope. Lifecycle is managed manually via the returned cleanup.
+  void refresh();
 
   const timer = setInterval(() => {
     void refresh();
   }, REFRESH_INTERVAL_MS);
-
-  onCleanup(() => {
-    clearInterval(timer);
-    stopIdle();
-    disposeSlot();
-  });
 
   return () => {
     clearInterval(timer);
