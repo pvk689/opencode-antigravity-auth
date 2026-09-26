@@ -66,28 +66,30 @@ export async function fetchQuotaSnapshot(): Promise<QuotaSnapshot> {
       const agModels: QuotaModelItem[] = [];
       const cliModels: QuotaModelItem[] = [];
 
-      // Extract Antigravity quota models (same clean names as agy)
+      // Extract Antigravity quota models: gộp thành 2 dòng chính: Claude và Gemini (chung quota Flash & Pro)
       if (res.quota?.groups) {
         const groups = res.quota.groups;
         if (groups.claude) {
           agModels.push({
-            name: "Claude 4.6 (Sonnet/Opus)",
+            name: "Claude",
             remainingFraction: groups.claude.remainingFraction ?? 1,
             resetTime: groups.claude.resetTime,
           });
         }
-        if (groups["gemini-pro"]) {
+
+        const geminiGroup = groups["gemini-flash"] ?? groups["gemini-pro"];
+        if (geminiGroup) {
+          const proRemaining = groups["gemini-pro"]?.remainingFraction;
+          const flashRemaining = groups["gemini-flash"]?.remainingFraction;
+          let remaining = geminiGroup.remainingFraction ?? 1;
+          if (typeof proRemaining === "number" && typeof flashRemaining === "number") {
+            remaining = Math.min(proRemaining, flashRemaining);
+          }
+
           agModels.push({
-            name: "Gemini 3 Pro / 3.1 Pro",
-            remainingFraction: groups["gemini-pro"].remainingFraction ?? 1,
-            resetTime: groups["gemini-pro"].resetTime,
-          });
-        }
-        if (groups["gemini-flash"]) {
-          agModels.push({
-            name: "Gemini 3 Flash (3.8/3.7)",
-            remainingFraction: groups["gemini-flash"].remainingFraction ?? 1,
-            resetTime: groups["gemini-flash"].resetTime,
+            name: "Gemini",
+            remainingFraction: remaining,
+            resetTime: geminiGroup.resetTime ?? groups["gemini-pro"]?.resetTime,
           });
         }
       }

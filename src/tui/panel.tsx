@@ -97,7 +97,7 @@ function QuotaPanelView(props: {
                           const tone = toneFor(model.remainingFraction);
                           return (
                             <text fg={dimmed ? muted : toneColor(theme, tone)}>
-                              {connector} {model.name.padEnd(24)} {quotaBar(model.remainingFraction, 10)}
+                              {connector} {model.name.padEnd(8)} {quotaBar(model.remainingFraction, 10)}
                               {formatReset(model.resetTime)}
                             </text>
                           );
