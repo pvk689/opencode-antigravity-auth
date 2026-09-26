@@ -792,6 +792,20 @@ export function prepareAntigravityRequest(
   // This header is added by OpenCode/AI SDK and can force project-level checks
   // that are not required for Antigravity/Gemini CLI OAuth requests.
   headers.delete("x-goog-user-project");
+  // Strip OpenCode v2 core headers that must never reach Google (agy parity +
+  // privacy). In particular `x-goog-api-key` carries the OAuth access token,
+  // which Google validates as a GCP API key and rejects with 400
+  // "API key not valid". The session/affinity headers leak internal session IDs.
+  for (const leaked of [
+    "x-goog-api-key",
+    "x-opencode-client",
+    "x-opencode-project",
+    "x-opencode-session",
+    "x-session-id",
+    "x-session-affinity",
+  ]) {
+    headers.delete(leaked);
+  }
 
   const match = input.match(/\/models\/([^:]+):(\w+)/);
   if (!match) {

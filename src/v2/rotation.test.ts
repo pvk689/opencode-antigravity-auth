@@ -2,6 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@opencode-ai/plugin", () => ({ tool: vi.fn() }));
 
+// Same convention as accounts.test.ts: never let tests write the real pool file
+// (a debounced requestSaveToDisk/saveToDisk would otherwise persist fixtures).
+vi.mock("../plugin/storage", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../plugin/storage")>();
+  return {
+    ...original,
+    saveAccounts: vi.fn().mockResolvedValue(undefined),
+    saveAccountsReplace: vi.fn().mockResolvedValue(undefined),
+    clearAccounts: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import { AccountManager } from "../plugin/accounts";
 import type { AccountStorageV4 } from "../plugin/storage";
 import { DEFAULT_CONFIG } from "../plugin/config";
@@ -76,9 +88,20 @@ describe("V2 request pipeline (mocked fetch)", () => {
     const event = {
       request: new Request(GEMINI_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Simulate OpenCode v2 core telemetry headers: none of these may leak
+        // to Google (agy parity; x-goog-api-key in particular causes 400
+        // "API key not valid" because it carries the OAuth access token).
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": "ya29.test",
+          "x-opencode-client": "cli",
+          "x-opencode-session": "ses_test",
+          "x-session-id": "ses_test",
+          "x-session-affinity": "ses_test",
+        },
         body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
       }),
+      sessionID: "ses-test",
       model: { providerID: "google", id: "antigravity-gemini-3.8-flash" },
     };
 
@@ -86,7 +109,26 @@ describe("V2 request pipeline (mocked fetch)", () => {
     expect(event.request.url).toContain("cloudcode-pa.googleapis.com");
     expect(event.request.headers.get("authorization")).toBe("Bearer ya29.test");
 
-    const responseEvent = { request: event.request, response: quota429() };
+    // Agy parity: nothing extra may go on the wire. The outgoing headers must be
+    // exactly what the shared prepare step produces: no correlation/debug headers
+    // (x-ag-*, x-opencode-*), no session telemetry, and no stripped headers
+    // (x-goog-user-project).
+    const outgoingNames: string[] = [];
+    event.request.headers.forEach((_value, name) => {
+      outgoingNames.push(name);
+    });
+    expect(outgoingNames.filter((name) => name.startsWith("x-ag-"))).toEqual([]);
+    expect(outgoingNames.filter((name) => name.startsWith("x-opencode-"))).toEqual([]);
+    expect(outgoingNames.filter((name) => name.startsWith("x-session-"))).toEqual([]);
+    expect(event.request.headers.has("x-goog-api-key")).toBe(false);
+    expect(event.request.headers.has("x-goog-user-project")).toBe(false);
+
+    const responseEvent = {
+      request: event.request,
+      response: quota429(),
+      sessionID: "ses-test",
+      model: { providerID: "google", id: "antigravity-gemini-3.8-flash" },
+    };
     await handleHttpResponse(responseEvent);
     const rotationCalls = fetchCalls.filter((c) => c.url.includes("streamGenerateContent"));
     // Core attempt is provided directly; exactly one rotation fetch expected.

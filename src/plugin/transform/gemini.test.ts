@@ -315,7 +315,36 @@ describe("transform/gemini", () => {
         ],
       };
       const result = normalizeGeminiTools(payload);
-      expect(result.toolDebugMissing).toBe(2);
+      // tool3's property-less `{type: "object"}` also needs the placeholder:
+      // Antigravity's strict validation rejects object schemas without properties.
+      expect(result.toolDebugMissing).toBe(3);
+    });
+
+    it("treats OpenCode v2 empty parameters ({}) as a missing schema", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          { name: "edit", description: "Edit", parameters: {} },
+        ],
+      };
+      const result = normalizeGeminiTools(payload);
+      expect(result.toolDebugMissing).toBe(1);
+    });
+
+    it("emits placeholder parameters in wrapped declarations for empty schemas", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          { name: "edit", description: "Edit", parameters: {} },
+        ],
+      };
+      applyGeminiTransforms(payload, { model: "gemini-3.8-flash" });
+      const tools = payload.tools as Array<{ functionDeclarations?: Array<Record<string, unknown>> }>;
+      const params = tools[0]?.functionDeclarations?.[0]?.parameters as
+        | Record<string, unknown>
+        | undefined;
+      expect(params?.type).toBe("OBJECT");
+      expect(params?.properties).toHaveProperty("_placeholder");
     });
 
     it("generates debug summaries for each tool", () => {
@@ -458,7 +487,8 @@ describe("transform/gemini", () => {
         model: "gemini-2.5-flash",
       });
       expect(result.toolDebugSummaries).toHaveLength(2);
-      expect(result.toolDebugMissing).toBe(1);
+      // tool1's property-less `{type: "object"}` schema needs the placeholder too.
+      expect(result.toolDebugMissing).toBe(2);
     });
 
     it("defaults includeThoughts to true when not specified", () => {
@@ -1088,7 +1118,14 @@ describe("transform/gemini", () => {
       const tools = payload.tools as Array<Record<string, unknown>>;
       const decls = tools[0]!.functionDeclarations as Array<Record<string, unknown>>;
       expect(decls[0]!.name).toBe("test_fn");
-      expect(decls[0]!.parameters).toEqual({ type: "OBJECT", properties: {} });
+      // Empty-properties schemas are rejected by Antigravity: placeholder injected.
+      expect(decls[0]!.parameters).toEqual({
+        type: "OBJECT",
+        properties: {
+          _placeholder: { type: "BOOLEAN", description: "Placeholder. Always pass true." },
+        },
+        required: ["_placeholder"],
+      });
     });
 
     it("extracts schema from custom.input_schema", () => {
@@ -1213,7 +1250,13 @@ describe("transform/gemini", () => {
       
       const tools = payload.tools as Array<Record<string, unknown>>;
       const decls = tools[0]!.functionDeclarations as Array<Record<string, unknown>>;
-      expect(decls[0]!.parameters).toEqual({ type: "OBJECT", properties: {} });
+      expect(decls[0]!.parameters).toEqual({
+        type: "OBJECT",
+        properties: {
+          _placeholder: { type: "BOOLEAN", description: "Placeholder. Always pass true." },
+        },
+        required: ["_placeholder"],
+      });
     });
 
     it("generates default name when missing", () => {

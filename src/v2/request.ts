@@ -63,9 +63,6 @@ import { createLogger } from "../plugin/logger";
 
 const log = createLogger("v2-request");
 
-/** Private header carrying the attempt id from the request hook to the response hook. */
-const ATTEMPT_HEADER = "x-ag-req";
-
 const TIER_SUFFIX_REGEX = /-(minimal|low|medium|high|max)$/;
 
 let attemptSequence = 0;
@@ -84,6 +81,8 @@ interface PreparedSummary {
 
 interface StoredAttempt {
   id: string;
+  sessionID: string;
+  modelId: string;
   accountIndex: number;
   headerStyle: HeaderStyle;
   family: ModelFamily;
@@ -112,9 +111,18 @@ interface FailureState {
   toolDebugPayload?: string;
 }
 
-const attemptsById = new Map<string, StoredAttempt>();
-const attemptsByRequest = new WeakMap<object, string>();
-const MAX_STORED_ATTEMPTS = 1000;
+// Request correlation between the http.request and http.response hooks.
+//
+// Agy-parity rule: NOTHING extra may go on the wire. In particular no correlation
+// header is ever set on the outgoing request (prepare's output is sent byte-identical).
+// Correlation is by Request object identity (WeakMap); the bounded recent-list fallback
+// only triggers if core ever clones the request between hooks, and every fallback use
+// or miss is counted + logged so a leak-free design stays observable.
+const attemptsByRequest = new WeakMap<object, StoredAttempt>();
+const recentAttempts: StoredAttempt[] = [];
+const MAX_STORED_ATTEMPTS = 200;
+let correlationFallbackUses = 0;
+let correlationMisses = 0;
 
 const emptyResponseAttempts = new Map<string, number>();
 
@@ -146,28 +154,35 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 function storeAttempt(attempt: StoredAttempt, request: Request): void {
-  if (attemptsById.size >= MAX_STORED_ATTEMPTS) {
-    const oldest = attemptsById.keys().next().value;
-    if (oldest) attemptsById.delete(oldest);
+  attemptsByRequest.set(request, attempt);
+  recentAttempts.push(attempt);
+  while (recentAttempts.length > MAX_STORED_ATTEMPTS) {
+    recentAttempts.shift();
   }
-  attemptsById.set(attempt.id, attempt);
-  attemptsByRequest.set(request, attempt.id);
 }
 
-function lookupAttempt(request: Request): StoredAttempt | null {
+function removeAttempt(id: string): void {
+  const index = recentAttempts.findIndex((a) => a.id === id);
+  if (index >= 0) {
+    recentAttempts.splice(index, 1);
+  }
+}
+
+function lookupAttempt(request: Request, sessionID: string, modelId: string): StoredAttempt | null {
   const byObject = attemptsByRequest.get(request);
   if (byObject) {
-    const stored = attemptsById.get(byObject);
-    if (stored) return stored;
+    return byObject;
   }
-  try {
-    const byHeader = request.headers.get(ATTEMPT_HEADER);
-    if (byHeader) {
-      return attemptsById.get(byHeader) ?? null;
+  for (let i = recentAttempts.length - 1; i >= 0; i--) {
+    const candidate = recentAttempts[i];
+    if (candidate && candidate.sessionID === sessionID && candidate.modelId === modelId) {
+      correlationFallbackUses += 1;
+      log.debug("attempt-correlation-fallback", { id: candidate.id, fallbackUses: correlationFallbackUses });
+      return candidate;
     }
-  } catch {
-    // headers unavailable - treat as foreign request
   }
+  correlationMisses += 1;
+  log.debug("attempt-correlation-miss", { misses: correlationMisses });
   return null;
 }
 
@@ -435,6 +450,7 @@ function resolveHeaderStyleForAccount(
 
 export async function handleHttpRequest(event: {
   request: Request;
+  sessionID: string;
   model: { providerID: string; id: string; variant?: unknown };
 }): Promise<void> {
   const urlString = event.request.url;
@@ -465,48 +481,15 @@ export async function handleHttpRequest(event: {
     config,
   );
 
-  const { account, headerStyle: selectedStyle } = await selectAccount(
-    accountManager,
-    family,
-    model,
-    preferredHeaderStyle,
-    allowQuotaFallback,
-    signal,
-  );
-
-  if (isDebugEnabled()) {
-    logAccountContext("Selected", {
-      index: account.index,
-      email: account.email,
-      family,
-      totalAccounts: accountManager.getAccountCount(),
-      rateLimitState: account.rateLimitResetTimes,
-    });
-  }
-
-  const accountCount = accountManager.getAccountCount();
-  if (accountCount > 1 && accountManager.shouldShowAccountToast(account.index)) {
-    const accountLabel = account.email || `Account ${account.index + 1}`;
-    const enabledAccounts = accountManager.getEnabledAccounts();
-    const enabledPosition = enabledAccounts.findIndex((a) => a.index === account.index) + 1;
-    notify(`Using ${accountLabel} (${enabledPosition}/${accountCount})`, "info");
-    accountManager.markToastShown(account.index);
-  }
-  accountManager.requestSaveToDisk();
-
-  // Auth (token refresh + project context) happens once inside
-  // handleHttpRequestWithAccount so each request authenticates exactly once.
-  const resolved = resolveHeaderStyleForAccount(
-    accountManager,
-    account,
-    family,
-    model,
-    selectedStyle,
-    allowQuotaFallback,
-  );
-  if (resolved.switchAccount) {
-    // Mirror V1: retry selection with the account excluded via rate-limit state.
-    const reselected = await selectAccount(
+  // V1 parity: the outer loop rotates transparently when prelude auth fails
+  // (invalid_grant removals / cooldowns are applied inside ensureAccountAuth,
+  // so every retry reselects forward). Bounded to rule out a spin when an
+  // account fails without being excluded.
+  const maxPreludeAttempts = Math.max(3, accountManager.getAccountCount() * 2 + 1);
+  let lastAuthError: unknown = null;
+  for (let preludeAttempt = 0; preludeAttempt < maxPreludeAttempts; preludeAttempt++) {
+    throwIfAborted(signal);
+    const { account, headerStyle: selectedStyle } = await selectAccount(
       accountManager,
       family,
       model,
@@ -514,28 +497,79 @@ export async function handleHttpRequest(event: {
       allowQuotaFallback,
       signal,
     );
-    return handleHttpRequestWithAccount(event, {
-      account: reselected.account,
-      headerStyle: reselected.headerStyle,
+
+    if (isDebugEnabled()) {
+      logAccountContext("Selected", {
+        index: account.index,
+        email: account.email,
+        family,
+        totalAccounts: accountManager.getAccountCount(),
+        rateLimitState: account.rateLimitResetTimes,
+      });
+    }
+
+    const accountCount = accountManager.getAccountCount();
+    if (accountCount > 1 && accountManager.shouldShowAccountToast(account.index)) {
+      const accountLabel = account.email || `Account ${account.index + 1}`;
+      const enabledAccounts = accountManager.getEnabledAccounts();
+      const enabledPosition = enabledAccounts.findIndex((a) => a.index === account.index) + 1;
+      notify(`Using ${accountLabel} (${enabledPosition}/${accountCount})`, "info");
+      accountManager.markToastShown(account.index);
+    }
+    accountManager.requestSaveToDisk();
+
+    let finalAccount = account;
+    let finalStyle = selectedStyle;
+    const resolved = resolveHeaderStyleForAccount(
+      accountManager,
+      account,
+      family,
+      model,
+      selectedStyle,
+      allowQuotaFallback,
+    );
+    if (resolved.switchAccount) {
+      // Mirror V1: retry selection with the account excluded via rate-limit state.
+      const reselected = await selectAccount(
+        accountManager,
+        family,
+        model,
+        preferredHeaderStyle,
+        allowQuotaFallback,
+        signal,
+      );
+      finalAccount = reselected.account;
+      finalStyle = reselected.headerStyle;
+    }
+
+    let auth: { accessToken: string; projectId: string };
+    try {
+      auth = await ensureAccountAuth(accountManager, finalAccount, family, model);
+    } catch (error) {
+      lastAuthError = error;
+      continue;
+    }
+
+    await handleHttpRequestWithAccount(event, {
+      account: finalAccount,
+      headerStyle: finalStyle,
       family,
       model,
       effectiveUrl,
       signal,
+      accessToken: auth.accessToken,
+      projectId: auth.projectId,
     });
+    return;
   }
 
-  await handleHttpRequestWithAccount(event, {
-    account,
-    headerStyle: resolved.headerStyle,
-    family,
-    model,
-    effectiveUrl,
-    signal,
-  });
+  throw lastAuthError instanceof Error
+    ? lastAuthError
+    : new Error("Antigravity account authentication failed repeatedly.");
 }
 
 async function handleHttpRequestWithAccount(
-  event: { request: Request },
+  event: { request: Request; sessionID: string; model: { providerID: string; id: string } },
   opts: {
     account: ManagedAccount;
     headerStyle: HeaderStyle;
@@ -543,13 +577,15 @@ async function handleHttpRequestWithAccount(
     model: string | null;
     effectiveUrl: string;
     signal: AbortSignal;
+    accessToken: string;
+    projectId: string;
   },
 ): Promise<void> {
   const config = getV2Config();
-  const accountManager = getV2AccountManager();
-  const { account, headerStyle, family, model, effectiveUrl, signal } = opts;
-
-  const { accessToken, projectId } = await ensureAccountAuth(accountManager, account, family, model);
+  const { account, headerStyle, accessToken, projectId } = opts;
+  const { family, model, effectiveUrl, signal } = opts;
+  const sessionID = event.sessionID;
+  const modelId = String(event.model.id);
 
   let bodyText: string | undefined;
   try {
@@ -597,8 +633,9 @@ async function handleHttpRequestWithAccount(
   });
 
   const id = `ag-${Date.now().toString(36)}-${(attemptSequence += 1).toString(36)}`;
+  // NOTE: no correlation header is set here on purpose (agy parity — prepare's
+  // headers go on the wire untouched). See lookupAttempt.
   const headers = new Headers(prepared.init.headers);
-  headers.set(ATTEMPT_HEADER, id);
   const nextRequest = new Request(resolvedUrl, {
     method: prepared.init.method ?? event.request.method,
     headers,
@@ -608,6 +645,8 @@ async function handleHttpRequestWithAccount(
   storeAttempt(
     {
       id,
+      sessionID,
+      modelId,
       accountIndex: account.index,
       headerStyle,
       family,
@@ -1018,6 +1057,39 @@ async function runRotation(stored: StoredAttempt, firstResponse: Response): Prom
     if (current.status === 403) {
       const errorBodyText = await current.clone().text().catch(() => "");
       const extracted = extractVerificationErrorDetails(errorBodyText);
+      // Permanent license/subscription denials (e.g. SUBSCRIPTION_REQUIRED for a
+      // model the account may not use) must NOT spin the endpoint loop: every
+      // endpoint shares the account's license state, so retries are pure
+      // hammering (account-ban risk). Lock only this model+quota key and fail
+      // fast. Deliberate deviation from V1, which retried all 403s per endpoint.
+      const licenseDenied =
+        !extracted.validationRequired &&
+        /subscri|license|permission_denied/i.test(
+          `${extracted.message ?? ""} ${errorBodyText.slice(0, 500)}`,
+        );
+      if (licenseDenied) {
+        const active = currentAccount();
+        const cooldownMs = 10 * 60 * 1000;
+        // Model-scoped lock only (no account-wide cooldown/disable): other
+        // models on this account stay usable.
+        accountManager.markRateLimited(active, cooldownMs, family, headerStyle, model);
+        accountManager.requestSaveToDisk();
+        getHealthTracker().recordFailure(active.index);
+        log.warn("license-denied", {
+          index: active.index,
+          model,
+          message: extracted.message,
+        });
+        lastFailure = failureFromAttempt(current, prepared, debugContext);
+        if (accountCount <= 1) {
+          return transformFailure(lastFailure);
+        }
+        const reselected = await selectAccount(accountManager, family, model, headerStyle, true, signal);
+        account = reselected.account;
+        headerStyle = reselected.headerStyle;
+        endpointIndex = 0;
+        continue;
+      }
       if (extracted.validationRequired) {
         const active = currentAccount();
         const verificationReason = extracted.message ?? "Google requires account verification.";
@@ -1147,16 +1219,21 @@ async function runRotation(stored: StoredAttempt, firstResponse: Response): Prom
   }
 }
 
-export async function handleHttpResponse(event: { request: Request; response: Response }): Promise<void> {
-  const stored = lookupAttempt(event.request);
+export async function handleHttpResponse(event: {
+  request: Request;
+  response: Response;
+  sessionID: string;
+  model: { providerID: string; id: string };
+}): Promise<void> {
+  const stored = lookupAttempt(event.request, event.sessionID, String(event.model.id));
   if (!stored) {
     return;
   }
-  attemptsById.delete(stored.id);
+  removeAttempt(stored.id);
   try {
     event.response = await runRotation(stored, event.response);
   } catch (error) {
-    attemptsById.delete(stored.id);
+    removeAttempt(stored.id);
     throw error instanceof Error ? error : new Error(String(error));
   }
 }

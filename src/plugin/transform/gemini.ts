@@ -8,6 +8,71 @@
  */
 
 import type { RequestPayload, ThinkingConfig, ThinkingTier, GoogleSearchConfig } from "./types";
+import {
+  EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
+  EMPTY_SCHEMA_PLACEHOLDER_NAME,
+} from "../../constants";
+
+/**
+ * Placeholder parameters injected when a tool declares no usable schema.
+ * Antigravity's strict validation rejects missing/empty object schemas.
+ */
+const PLACEHOLDER_SCHEMA: Record<string, unknown> = {
+  type: "OBJECT",
+  properties: {
+    [EMPTY_SCHEMA_PLACEHOLDER_NAME]: {
+      type: "BOOLEAN",
+      description: EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
+    },
+  },
+  required: [EMPTY_SCHEMA_PLACEHOLDER_NAME],
+};
+
+/**
+ * True for values that carry no usable schema: missing, non-objects, arrays,
+ * or empty objects. OpenCode v2 sends `"parameters": {}` for tools without a
+ * declared schema — truthy but useless, so it must be skipped explicitly
+ * (a plain `||` chain would keep it and Antigravity answers 400).
+ */
+function isEmptySchemaValue(value: unknown): boolean {
+  return (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value as Record<string, unknown>).length === 0
+  );
+}
+
+/**
+ * Returns the schema when it declares at least one property, otherwise a copy
+ * merged with the placeholder properties. Never returns an empty schema.
+ */
+function ensureSchemaHasProperties(schema: unknown): Record<string, unknown> {
+  if (isEmptySchemaValue(schema)) {
+    return { ...PLACEHOLDER_SCHEMA };
+  }
+  const record = schema as Record<string, unknown>;
+  const props = record.properties;
+  if (!props || typeof props !== "object" || Object.keys(props).length === 0) {
+    return {
+      ...record,
+      type: "OBJECT",
+      properties: PLACEHOLDER_SCHEMA.properties,
+      required: PLACEHOLDER_SCHEMA.required,
+    };
+  }
+  return record;
+}
+
+/** First schema candidate that actually carries a usable schema, if any. */
+function pickSchema(candidates: unknown[]): Record<string, unknown> | undefined {
+  for (const candidate of candidates) {
+    if (!isEmptySchemaValue(candidate)) {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Transform a JSON Schema to Gemini-compatible format.
@@ -256,27 +321,29 @@ export function normalizeGeminiTools(
       newTool.parameters,
       newTool.input_schema,
       newTool.inputSchema,
-    ].filter(Boolean);
+      // OpenCode v2 sends `"parameters": {}` for tools without a declared schema.
+      // An empty object is truthy but carries no usable schema, so pickSchema skips
+      // it and lets a fuller candidate (or the placeholder below) win.
+    ];
 
     const placeholderSchema: Record<string, unknown> = {
-      type: "OBJECT",
-      properties: {
-        _placeholder: {
-          type: "BOOLEAN",
-          description: "Placeholder. Always pass true.",
-        },
-      },
-      required: ["_placeholder"],
+      ...PLACEHOLDER_SCHEMA,
     };
 
-    let schema = schemaCandidates[0] as Record<string, unknown> | undefined;
-    const schemaObjectOk = schema && typeof schema === "object" && !Array.isArray(schema);
-    if (!schemaObjectOk) {
-      schema = placeholderSchema;
+    const picked = pickSchema(schemaCandidates);
+    let schema: Record<string, unknown>;
+    if (!picked) {
+      schema = { ...PLACEHOLDER_SCHEMA };
       toolDebugMissing += 1;
     } else {
-      // Transform existing schema to Gemini-compatible format
-      schema = toGeminiSchema(schema) as Record<string, unknown>;
+      // Transform existing schema to Gemini-compatible format, injecting the
+      // placeholder when it declares no properties (rejected by Antigravity).
+      // ensureSchemaHasProperties returns the same reference when untouched.
+      const transformed = toGeminiSchema(picked) as Record<string, unknown>;
+      schema = ensureSchemaHasProperties(transformed);
+      if (schema !== transformed) {
+        toolDebugMissing += 1;
+      }
     }
 
     const nameCandidate =
@@ -319,10 +386,9 @@ export function normalizeGeminiTools(
     }
 
     if (newTool.custom && !(newTool.custom as Record<string, unknown>).input_schema) {
-      (newTool.custom as Record<string, unknown>).input_schema = {
-        type: "OBJECT",
-        properties: {},
-      };
+      // An input_schema with empty properties is rejected by Antigravity, so
+      // use the placeholder schema (same remedy as missing schemas above).
+      (newTool.custom as Record<string, unknown>).input_schema = placeholderSchema;
       toolDebugMissing += 1;
     }
 
@@ -506,7 +572,9 @@ export function wrapToolsAsFunctionDeclarations(payload: RequestPayload): WrapTo
           functionDeclarations.push({
             name: String(decl.name || `tool-${functionDeclarations.length}`),
             description: String(decl.description || ""),
-            parameters: (decl.parameters as Record<string, unknown>) || { type: "OBJECT", properties: {} },
+            parameters: ensureSchemaHasProperties(
+              pickSchema([decl.parameters]) ?? { ...PLACEHOLDER_SCHEMA },
+            ),
           });
         }
       }
@@ -530,17 +598,18 @@ export function wrapToolsAsFunctionDeclarations(payload: RequestPayload): WrapTo
       ""
     );
 
-    const schema = (
-      fn?.input_schema ||
-      fn?.parameters ||
-      fn?.inputSchema ||
-      custom?.input_schema ||
-      custom?.parameters ||
-      tool.parameters ||
-      tool.input_schema ||
-      tool.inputSchema ||
-      { type: "OBJECT", properties: {} }
-    ) as Record<string, unknown>;
+    const picked = pickSchema([
+      fn?.input_schema,
+      fn?.parameters,
+      fn?.inputSchema,
+      custom?.input_schema,
+      custom?.parameters,
+      tool.parameters,
+      tool.input_schema,
+      tool.inputSchema,
+    ]);
+
+    const schema = ensureSchemaHasProperties(picked ?? { ...PLACEHOLDER_SCHEMA });
 
     functionDeclarations.push({
       name,
