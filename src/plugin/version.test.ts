@@ -52,6 +52,19 @@ describe("setAntigravityVersion", () => {
 })
 
 describe("initAntigravityVersion — network failure path", () => {
+  it("uses the official release version instead of a stale updater response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string) => ({
+      ok: true,
+      text: async () => url.includes("antigravity.google")
+        ? '<meta name="generator" content="Astro v7.3.5"><a href="#rel-hub-2.29.1">v2.29.1</a>'
+        : "Auto updater is running. Fixed Version: 2.0.6",
+    })))
+    const { getAntigravityVersion } = await import("../constants.ts")
+    const { initAntigravityVersion } = await import("./version.ts")
+    await initAntigravityVersion()
+    expect(getAntigravityVersion()).toBe("2.29.1")
+  })
+
   it("falls back to hardcoded version when both fetches throw", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network unreachable")))
 

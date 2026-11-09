@@ -43,6 +43,14 @@ function isEmptySchemaValue(value: unknown): boolean {
   );
 }
 
+function schemaHasProperties(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const props = (schema as Record<string, unknown>).properties;
+  return !!props && typeof props === "object" && Object.keys(props).length > 0;
+}
+
 /**
  * Returns the schema when it declares at least one property, otherwise a copy
  * merged with the placeholder properties. Never returns an empty schema.
@@ -64,14 +72,31 @@ function ensureSchemaHasProperties(schema: unknown): Record<string, unknown> {
   return record;
 }
 
-/** First schema candidate that actually carries a usable schema, if any. */
+/**
+ * Pick the best schema candidate.
+ *
+ * Some OpenCode/Gemini tool shapes can carry both an empty compatibility
+ * `input_schema` and a real JSON schema in `parameters`. Prefer the first
+ * candidate with properties across the whole candidate list; otherwise return
+ * the first non-empty candidate so property-less schemas still get normalized
+ * into the placeholder by ensureSchemaHasProperties().
+ */
 function pickSchema(candidates: unknown[]): Record<string, unknown> | undefined {
+  let fallback: Record<string, unknown> | undefined;
+
   for (const candidate of candidates) {
-    if (!isEmptySchemaValue(candidate)) {
-      return candidate as Record<string, unknown>;
+    if (isEmptySchemaValue(candidate)) {
+      continue;
     }
+
+    const schema = candidate as Record<string, unknown>;
+    if (schemaHasProperties(schema)) {
+      return schema;
+    }
+    fallback ??= schema;
   }
-  return undefined;
+
+  return fallback;
 }
 
 /**
@@ -86,32 +111,34 @@ function pickSchema(candidates: unknown[]): Record<string, unknown> | undefined 
  * @param schema - A JSON Schema object or primitive value
  * @returns Gemini-compatible schema
  * 
- * Fields that Gemini API rejects and must be removed from schemas.
- * Antigravity uses strict protobuf-backed JSON validation.
+ * Fields Gemini's Schema proto understands. Antigravity validates strictly
+ * against that proto, so any other keyword is rejected with
+ * 400 "Unknown name ... Cannot find field". An allowlist is deliberate: JSON
+ * Schema keeps growing keywords (exclusiveMinimum, oneOf, examples, ...) that
+ * the proto never gains, and a denylist silently leaks each new one.
  */
-const UNSUPPORTED_SCHEMA_FIELDS = new Set([
-  "additionalProperties",
-  "$schema",
-  "$id",
-  "$comment",
-  "$ref",
-  "$defs",
-  "definitions",
-  "const",
-  "contentMediaType",
-  "contentEncoding",
-  "if",
-  "then",
-  "else",
-  "not",
-  "patternProperties",
-  "unevaluatedProperties",
-  "unevaluatedItems",
-  "dependentRequired",
-  "dependentSchemas",
-  "propertyNames",
-  "minContains",
-  "maxContains",
+const SUPPORTED_SCHEMA_FIELDS = new Set([
+  "type",
+  "format",
+  "title",
+  "description",
+  "nullable",
+  "enum",
+  "items",
+  "properties",
+  "required",
+  "anyOf",
+  "propertyOrdering",
+  "default",
+  "minimum",
+  "maximum",
+  "minItems",
+  "maxItems",
+  "minProperties",
+  "maxProperties",
+  "minLength",
+  "maxLength",
+  "pattern",
 ]);
 
 export function toGeminiSchema(schema: unknown): unknown {
@@ -131,15 +158,30 @@ export function toGeminiSchema(schema: unknown): unknown {
     }
   }
 
-  for (const [key, value] of Object.entries(inputSchema)) {
-    // Skip unsupported fields that Gemini API rejects
-    if (UNSUPPORTED_SCHEMA_FIELDS.has(key)) {
+  for (const [rawKey, value] of Object.entries(inputSchema)) {
+    // Gemini's Schema proto only has `anyOf`; map oneOf/allOf onto it instead
+    // of dropping them so the model still sees the alternatives.
+    const key = rawKey === "oneOf" || rawKey === "allOf" ? "anyOf" : rawKey;
+
+    // Everything outside the allowlist 400s Antigravity's strict validation.
+    if (!SUPPORTED_SCHEMA_FIELDS.has(key)) {
       continue;
     }
 
     if (key === "type" && typeof value === "string") {
       // Convert type to uppercase for Gemini API
       result[key] = value.toUpperCase();
+    } else if (key === "type" && Array.isArray(value)) {
+      // Zod emits ["string", "null"] for nullable fields. The proto wants a
+      // single type plus `nullable: true`.
+      const types = value.filter((item): item is string => typeof item === "string");
+      const nonNull = types.filter((item) => item.toLowerCase() !== "null");
+      if (nonNull.length > 0) {
+        result.type = nonNull[0]!.toUpperCase();
+      }
+      if (nonNull.length !== types.length) {
+        result.nullable = true;
+      }
     } else if (key === "properties" && typeof value === "object" && value !== null) {
       // Recursively transform nested property schemas
       const props: Record<string, unknown> = {};
@@ -156,8 +198,8 @@ export function toGeminiSchema(schema: unknown): unknown {
     } else if (key === "enum" && Array.isArray(value)) {
       // Keep enum values as-is
       result[key] = value;
-    } else if (key === "default" || key === "examples") {
-      // Keep default and examples as-is
+    } else if (key === "default") {
+      // Keep default as-is (`examples` is not in the proto, so it is dropped)
       result[key] = value;
     } else if (key === "required" && Array.isArray(value)) {
       // Filter required array to only include properties that exist
@@ -200,14 +242,22 @@ export function isGeminiModel(model: string): boolean {
  * Check if a model is Gemini 3 (uses thinkingLevel string).
  */
 export function isGemini3Model(model: string): boolean {
-  return model.toLowerCase().includes("gemini-3");
+  const lower = model.toLowerCase();
+  if (lower.includes("flash-lite") || lower.includes("lite")) {
+    return false;
+  }
+  return lower.includes("gemini-3") || lower.includes("gemini-4");
 }
 
 /**
  * Check if a model is Gemini 2.5 (uses numeric thinkingBudget).
  */
 export function isGemini25Model(model: string): boolean {
-  return model.toLowerCase().includes("gemini-2.5");
+  const lower = model.toLowerCase();
+  if (lower.includes("flash-lite") || lower.includes("lite")) {
+    return false;
+  }
+  return lower.includes("gemini-2.5");
 }
 
 /**
@@ -305,8 +355,34 @@ export function normalizeGeminiTools(
   payload.tools = (payload.tools as unknown[]).map((tool: unknown, toolIndex: number) => {
     const t = tool as Record<string, unknown>;
 
-    // Skip normalization for Google Search tools (both old and new API)
-    if (t.googleSearch || t.googleSearchRetrieval) {
+    // Skip normalization for Google Search tools (both old and new API) and codeExecution
+    if (t.googleSearch || t.googleSearchRetrieval || t.codeExecution) {
+      return t;
+    }
+
+    // If already in functionDeclarations format (e.g. OpenCode), normalize declarations inside
+    if (t.functionDeclarations && Array.isArray(t.functionDeclarations)) {
+      for (let i = 0; i < t.functionDeclarations.length; i++) {
+        const decl = t.functionDeclarations[i] as Record<string, unknown>;
+        const picked = pickSchema([
+          decl.parametersJsonSchema,
+          decl.parameters,
+          decl.input_schema,
+          decl.inputSchema,
+        ]);
+        if (!picked) {
+          decl.parameters = { ...PLACEHOLDER_SCHEMA };
+          toolDebugMissing += 1;
+        } else {
+          const transformed = toGeminiSchema(picked) as Record<string, unknown>;
+          const schema = ensureSchemaHasProperties(transformed);
+          decl.parameters = schema;
+          if (schema !== transformed) {
+            toolDebugMissing += 1;
+          }
+        }
+        delete decl.parametersJsonSchema;
+      }
       return t;
     }
 
@@ -316,11 +392,14 @@ export function normalizeGeminiTools(
       (newTool.function as Record<string, unknown> | undefined)?.input_schema,
       (newTool.function as Record<string, unknown> | undefined)?.parameters,
       (newTool.function as Record<string, unknown> | undefined)?.inputSchema,
+      (newTool.function as Record<string, unknown> | undefined)?.parametersJsonSchema,
       (newTool.custom as Record<string, unknown> | undefined)?.input_schema,
       (newTool.custom as Record<string, unknown> | undefined)?.parameters,
+      (newTool.custom as Record<string, unknown> | undefined)?.parametersJsonSchema,
       newTool.parameters,
       newTool.input_schema,
       newTool.inputSchema,
+      newTool.parametersJsonSchema,
       // OpenCode v2 sends `"parameters": {}` for tools without a declared schema.
       // An empty object is truthy but carries no usable schema, so pickSchema skips
       // it and lets a fuller candidate (or the placeholder below) win.
@@ -569,12 +648,20 @@ export function wrapToolsAsFunctionDeclarations(payload: RequestPayload): WrapTo
     if (tool.functionDeclarations) {
       if (Array.isArray(tool.functionDeclarations)) {
         for (const decl of tool.functionDeclarations as Array<Record<string, unknown>>) {
+          // OpenCode sends the schema as `parametersJsonSchema`, not `parameters`.
+          const picked = pickSchema([
+            decl.parametersJsonSchema,
+            decl.parameters,
+            decl.input_schema,
+            decl.inputSchema,
+          ]);
+          const parameters = picked
+            ? ensureSchemaHasProperties(toGeminiSchema(picked) as Record<string, unknown>)
+            : { ...PLACEHOLDER_SCHEMA };
           functionDeclarations.push({
             name: String(decl.name || `tool-${functionDeclarations.length}`),
             description: String(decl.description || ""),
-            parameters: ensureSchemaHasProperties(
-              pickSchema([decl.parameters]) ?? { ...PLACEHOLDER_SCHEMA },
-            ),
+            parameters,
           });
         }
       }
@@ -609,7 +696,9 @@ export function wrapToolsAsFunctionDeclarations(payload: RequestPayload): WrapTo
       tool.inputSchema,
     ]);
 
-    const schema = ensureSchemaHasProperties(picked ?? { ...PLACEHOLDER_SCHEMA });
+    const schema = picked
+      ? ensureSchemaHasProperties(toGeminiSchema(picked) as Record<string, unknown>)
+      : { ...PLACEHOLDER_SCHEMA };
 
     functionDeclarations.push({
       name,

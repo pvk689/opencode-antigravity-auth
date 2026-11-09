@@ -31,8 +31,8 @@ export interface AgyStoredToken {
 export function getAgyTokenPaths(): string[] {
   const home = homedir();
   return [
-    join(home, ".gemini", "jetski-standalone-oauth-token"),
     join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+    join(home, ".gemini", "jetski-standalone-oauth-token"),
   ];
 }
 

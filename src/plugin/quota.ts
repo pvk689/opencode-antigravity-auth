@@ -112,8 +112,8 @@ function classifyQuotaGroup(modelName: string, displayName?: string): QuotaGroup
   if (combined.includes("claude")) {
     return "claude";
   }
-  const isGemini3 = combined.includes("gemini-3") || combined.includes("gemini 3");
-  if (!isGemini3) {
+  const isGemini = combined.includes("gemini-3") || combined.includes("gemini 3") || combined.includes("gemini-4") || combined.includes("gemini 4");
+  if (!isGemini) {
     return null;
   }
   const family = getModelFamily(modelName);
@@ -267,6 +267,7 @@ function aggregateGeminiCliQuota(response: RetrieveUserQuotaResponse): GeminiCli
     const modelId = bucket.modelId;
     const isRelevantModel = 
       modelId.startsWith("gemini-3-") || 
+      modelId.startsWith("gemini-4-") ||
       modelId === "gemini-2.5-pro";
     
     if (!isRelevantModel) {

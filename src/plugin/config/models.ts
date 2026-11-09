@@ -1,6 +1,6 @@
 import type { ProviderModel } from "../types";
 
-export type ModelThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type ModelThinkingLevel = "minimal" | "low" | "medium" | "high" | "max";
 
 export interface ModelThinkingConfig {
   thinkingBudget: number;
@@ -77,6 +77,62 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       medium: { thinkingLevel: "medium" },
       high: { thinkingLevel: "high" },
     },
+  },
+  "antigravity-gemini-4-argon": {
+    name: "Gemini 4 Argon (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
+  "antigravity-gemini-2.5-flash-lite": {
+    name: "Gemini 2.5 Flash Lite (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.1-flash-lite": {
+    name: "Gemini 3.1 Flash Lite (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.5-flash-lite": {
+    name: "Gemini 3.5 Flash Lite (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-claude-sonnet-5-5": {
+    name: "Claude Sonnet 5.5 (Antigravity)",
+    limit: { context: 200000, output: 64000 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingConfig: { thinkingBudget: 8192 } },
+      high: { thinkingConfig: { thinkingBudget: 32768 } },
+      max: { thinkingConfig: { thinkingBudget: 64000 } },
+    },
+  },
+  "antigravity-claude-opus-5-5": {
+    name: "Claude Opus 5.5 (Antigravity)",
+    limit: { context: 200000, output: 64000 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingConfig: { thinkingBudget: 8192 } },
+      medium: { thinkingConfig: { thinkingBudget: 16384 } },
+      high: { thinkingConfig: { thinkingBudget: 32768 } },
+      max: { thinkingConfig: { thinkingBudget: 64000 } },
+    },
+  },
+  "openai/gpt-oss-120b-maas": {
+    name: "GPT-OSS 120B MaaS (Antigravity)",
+    limit: { context: 131072, output: 8192 },
+    modalities: { input: ["text"], output: ["text"] },
+  },
+  "openai/gpt-oss-20b-maas": {
+    name: "GPT-OSS 20B MaaS (Antigravity)",
+    limit: { context: 131072, output: 8192 },
+    modalities: { input: ["text"], output: ["text"] },
   },
   "antigravity-gemini-3.8-flash": {
     name: "Gemini 3.8 Flash (Antigravity)",

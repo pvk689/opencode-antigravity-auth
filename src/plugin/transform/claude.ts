@@ -33,7 +33,7 @@ export function isClaudeModel(model: string): boolean {
  */
 export function isClaudeThinkingModel(model: string): boolean {
   const lower = model.toLowerCase();
-  return lower.includes("claude") && lower.includes("thinking");
+  return lower.includes("claude") && (lower.includes("thinking") || lower.includes("5-5") || lower.includes("5.5"));
 }
 
 /**

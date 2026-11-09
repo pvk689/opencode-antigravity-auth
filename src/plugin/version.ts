@@ -2,8 +2,8 @@
  * Remote Antigravity version fetcher.
  *
  * Mirrors the Antigravity-Manager's version resolution strategy:
- *   1. Auto-updater API (plain text with semver)
- *   2. Changelog page scrape (first 5000 chars)
+ *   1. Official changelog release identifiers
+ *   2. Auto-updater API (plain text with semver)
  *   3. Hardcoded fallback in constants.ts
  *
  * Called once at plugin startup to ensure headers use the latest
@@ -16,9 +16,8 @@ import { getAntigravityVersion, setAntigravityVersion } from "../constants";
 import { createLogger } from "./logger";
 
 const VERSION_URL = "https://antigravity-auto-updater-974169037036.us-central1.run.app";
-const CHANGELOG_URL = "https://antigravity.google/changelog";
+const CHANGELOG_URL = "https://antigravity.google/docs/changelog";
 const FETCH_TIMEOUT_MS = 5000;
-const CHANGELOG_SCAN_CHARS = 5000;
 const VERSION_REGEX = /\d+\.\d+\.\d+/;
 
 type VersionSource = "api" | "changelog" | "fallback";
@@ -28,15 +27,15 @@ function parseVersion(text: string): string | null {
   return match ? match[0] : null;
 }
 
-async function tryFetchVersion(url: string, maxChars?: number): Promise<string | null> {
+async function tryFetchVersion(url: string, pattern: RegExp = VERSION_REGEX): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) return null;
-    let text = await response.text();
-    if (maxChars) text = text.slice(0, maxChars);
-    return parseVersion(text);
+    const text = await response.text();
+    const match = text.match(pattern);
+    return match ? parseVersion(match[0]) : null;
   } catch {
     return null;
   } finally {
@@ -54,15 +53,14 @@ export async function initAntigravityVersion(): Promise<void> {
   let version: string | null;
   let source: VersionSource;
 
-  // 1. Try auto-updater API
-  version = await tryFetchVersion(VERSION_URL);
+  // The third-party updater can return a stale fixed version.
+  version = await tryFetchVersion(CHANGELOG_URL, /rel-hub-\d+\.\d+\.\d+/);
   if (version) {
-    source = "api";
+    source = "changelog";
   } else {
-    // 2. Try changelog page scrape
-    version = await tryFetchVersion(CHANGELOG_URL, CHANGELOG_SCAN_CHARS);
+    version = await tryFetchVersion(VERSION_URL);
     if (version) {
-      source = "changelog";
+      source = "api";
     } else {
       // 3. Fall back to hardcoded
       source = "fallback";

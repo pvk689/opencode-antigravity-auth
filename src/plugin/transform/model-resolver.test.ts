@@ -197,6 +197,158 @@ describe("resolveModelWithTier", () => {
     });
   });
 
+  describe("Gemini 4 Argon", () => {
+    it("gemini-4-argon resolves with default thinkingLevel low", () => {
+      const result = resolveModelWithTier("gemini-4-argon");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("low");
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.quotaPreference).toBe("antigravity");
+    });
+
+    it("gemini-4-argon-high resolves with thinkingLevel high", () => {
+      const result = resolveModelWithTier("gemini-4-argon-high");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("high");
+      expect(result.tier).toBe("high");
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("antigravity-gemini-4-argon-medium resolves with explicit quota and thinkingLevel medium", () => {
+      const result = resolveModelWithTier("antigravity-gemini-4-argon-medium");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("medium");
+      expect(result.tier).toBe("medium");
+      expect(result.explicitQuota).toBe(true);
+    });
+  });
+
+  describe("Claude 5.5 models", () => {
+    it("claude-sonnet-5-5 resolves as thinking model with default high budget", () => {
+      const result = resolveModelWithTier("claude-sonnet-5-5");
+      expect(result.actualModel).toBe("claude-sonnet-5-5");
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.thinkingBudget).toBe(32768);
+    });
+
+    it("claude-sonnet-5-5-max resolves with 64000 budget", () => {
+      const result = resolveModelWithTier("claude-sonnet-5-5-max");
+      expect(result.actualModel).toBe("claude-sonnet-5-5");
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.thinkingBudget).toBe(64000);
+      expect(result.tier).toBe("max");
+    });
+
+    it("antigravity-claude-opus-5-5-low resolves with low budget", () => {
+      const result = resolveModelWithTier("antigravity-claude-opus-5-5-low");
+      expect(result.actualModel).toBe("claude-opus-5-5");
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.thinkingBudget).toBe(8192);
+      expect(result.explicitQuota).toBe(true);
+    });
+  });
+
+  describe("Flash Lite models", () => {
+    it("gemini-3.1-flash-lite resolves without -tiered and without thinking", () => {
+      const result = resolveModelWithTier("gemini-3.1-flash-lite");
+      expect(result.actualModel).toBe("gemini-3.1-flash-lite");
+      expect(result.isThinkingModel).toBe(false);
+      expect(result.thinkingLevel).toBeUndefined();
+    });
+
+    it("gemini-2.5-flash-lite resolves without thinking", () => {
+      const result = resolveModelWithTier("gemini-2.5-flash-lite");
+      expect(result.actualModel).toBe("gemini-2.5-flash-lite");
+      expect(result.isThinkingModel).toBe(false);
+    });
+  });
+
+  describe("OpenAI MaaS models", () => {
+    it("openai/gpt-oss-120b-maas resolves without stripping medium or thinking", () => {
+      const result = resolveModelWithTier("openai/gpt-oss-120b-maas");
+      expect(result.actualModel).toBe("openai/gpt-oss-120b-maas");
+      expect(result.isThinkingModel).toBe(false);
+    });
+  });
+
+  describe("Gemini 4 Argon", () => {
+    it("gemini-4-argon defaults to thinkingLevel low", () => {
+      const result = resolveModelWithTier("gemini-4-argon");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("low");
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("gemini-4-argon-high resolves with thinkingLevel high", () => {
+      const result = resolveModelWithTier("gemini-4-argon-high");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("high");
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("antigravity-gemini-4-argon-medium resolves with thinkingLevel medium and explicit quota", () => {
+      const result = resolveModelWithTier("antigravity-gemini-4-argon-medium");
+      expect(result.actualModel).toBe("gemini-4-argon");
+      expect(result.thinkingLevel).toBe("medium");
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.explicitQuota).toBe(true);
+    });
+  });
+
+  describe("Claude 5.5", () => {
+    it("claude-sonnet-5-5 defaults to thinking budget 32768", () => {
+      const result = resolveModelWithTier("claude-sonnet-5-5");
+      expect(result.actualModel).toBe("claude-sonnet-5-5");
+      expect(result.thinkingBudget).toBe(32768);
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("claude-sonnet-5-5-max resolves with max budget 64000", () => {
+      const result = resolveModelWithTier("claude-sonnet-5-5-max");
+      expect(result.actualModel).toBe("claude-sonnet-5-5");
+      expect(result.thinkingBudget).toBe(64000);
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("claude-opus-5-5-medium resolves with medium budget 16384", () => {
+      const result = resolveModelWithTier("claude-opus-5-5-medium");
+      expect(result.actualModel).toBe("claude-opus-5-5");
+      expect(result.thinkingBudget).toBe(16384);
+      expect(result.isThinkingModel).toBe(true);
+    });
+
+    it("antigravity-claude-opus-5-5-max resolves with budget 64000 and explicit quota", () => {
+      const result = resolveModelWithTier("antigravity-claude-opus-5-5-max");
+      expect(result.actualModel).toBe("claude-opus-5-5");
+      expect(result.thinkingBudget).toBe(64000);
+      expect(result.isThinkingModel).toBe(true);
+      expect(result.explicitQuota).toBe(true);
+    });
+  });
+
+  describe("Flash Lite models", () => {
+    it("gemini-2.5-flash-lite is non-thinking and not tiered", () => {
+      const result = resolveModelWithTier("gemini-2.5-flash-lite");
+      expect(result.actualModel).toBe("gemini-2.5-flash-lite");
+      expect(result.isThinkingModel).toBe(false);
+      expect(result.thinkingLevel).toBeUndefined();
+      expect(result.thinkingBudget).toBeUndefined();
+    });
+
+    it("gemini-3.1-flash-lite is non-thinking and not tiered", () => {
+      const result = resolveModelWithTier("gemini-3.1-flash-lite");
+      expect(result.actualModel).toBe("gemini-3.1-flash-lite");
+      expect(result.isThinkingModel).toBe(false);
+      expect(result.thinkingLevel).toBeUndefined();
+    });
+
+    it("gemini-3.5-flash-lite is non-thinking and not tiered", () => {
+      const result = resolveModelWithTier("gemini-3.5-flash-lite");
+      expect(result.actualModel).toBe("gemini-3.5-flash-lite");
+      expect(result.isThinkingModel).toBe(false);
+    });
+  });
+
   describe("Image models", () => {
     it("marks antigravity-gemini-3-pro-image as explicit quota", () => {
       const result = resolveModelWithTier("antigravity-gemini-3-pro-image");

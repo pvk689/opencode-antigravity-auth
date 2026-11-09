@@ -82,6 +82,11 @@ describe("transform/gemini", () => {
       expect(isGemini3Model("GEMINI-3-PRO")).toBe(true);
     });
 
+    it("returns true for gemini-4-argon", () => {
+      expect(isGemini3Model("gemini-4-argon")).toBe(true);
+      expect(isGemini3Model("gemini-4-argon-high")).toBe(true);
+    });
+
     it("returns false for gemini-2.5-pro", () => {
       expect(isGemini3Model("gemini-2.5-pro")).toBe(false);
     });
@@ -345,6 +350,40 @@ describe("transform/gemini", () => {
         | undefined;
       expect(params?.type).toBe("OBJECT");
       expect(params?.properties).toHaveProperty("_placeholder");
+    });
+
+    it("prefers usable parameters over an empty input_schema", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            function: {
+              name: "shell",
+              description: "Run a shell command",
+              input_schema: { type: "object", properties: {} },
+              parameters: {
+                type: "object",
+                properties: {
+                  command: { type: "string" },
+                  workdir: { type: "string" },
+                },
+                required: ["command"],
+              },
+            },
+          },
+        ],
+      };
+
+      applyGeminiTransforms(payload, { model: "gemini-3.8-flash" });
+
+      const tools = payload.tools as Array<{ functionDeclarations?: Array<Record<string, unknown>> }>;
+      const params = tools[0]?.functionDeclarations?.[0]?.parameters as Record<string, unknown>;
+      const props = params.properties as Record<string, unknown>;
+
+      expect(props).toHaveProperty("command");
+      expect(props).toHaveProperty("workdir");
+      expect(props).not.toHaveProperty("_placeholder");
+      expect(params.required).toEqual(["command"]);
     });
 
     it("generates debug summaries for each tool", () => {
@@ -821,7 +860,7 @@ describe("transform/gemini", () => {
       expect(anyOf[1]!.type).toBe("NUMBER");
     });
 
-    it("transforms oneOf schemas", () => {
+    it("maps oneOf to anyOf (Gemini Schema proto has no oneOf)", () => {
       const schema = {
         oneOf: [
           { type: "boolean" },
@@ -829,12 +868,13 @@ describe("transform/gemini", () => {
         ],
       };
       const result = toGeminiSchema(schema) as Record<string, unknown>;
-      const oneOf = result.oneOf as Array<Record<string, string>>;
-      expect(oneOf[0]!.type).toBe("BOOLEAN");
-      expect(oneOf[1]!.type).toBe("STRING");
+      expect(result).not.toHaveProperty("oneOf");
+      const anyOf = result.anyOf as Array<Record<string, string>>;
+      expect(anyOf[0]!.type).toBe("BOOLEAN");
+      expect(anyOf[1]!.type).toBe("STRING");
     });
 
-    it("transforms allOf schemas", () => {
+    it("maps allOf to anyOf (Gemini Schema proto has no allOf)", () => {
       const schema = {
         allOf: [
           { type: "object", properties: { a: { type: "string" } } },
@@ -842,12 +882,38 @@ describe("transform/gemini", () => {
         ],
       };
       const result = toGeminiSchema(schema) as Record<string, unknown>;
-      const allOf = result.allOf as Array<Record<string, unknown>>;
-      expect(allOf[0]!.type).toBe("OBJECT");
-      const props0 = allOf[0]!.properties as Record<string, Record<string, string>>;
+      expect(result).not.toHaveProperty("allOf");
+      const anyOf = result.anyOf as Array<Record<string, unknown>>;
+      expect(anyOf[0]!.type).toBe("OBJECT");
+      const props0 = anyOf[0]!.properties as Record<string, Record<string, string>>;
       expect(props0["a"]!.type).toBe("STRING");
-      const props1 = allOf[1]!.properties as Record<string, Record<string, string>>;
+      const props1 = anyOf[1]!.properties as Record<string, Record<string, string>>;
       expect(props1["b"]!.type).toBe("NUMBER");
+    });
+
+    it("drops keywords outside the Gemini Schema proto allowlist", () => {
+      const schema = {
+        type: "string",
+        description: "keep me",
+        examples: ["a"],
+        $anchor: "x",
+        exclusiveMinimum: 1,
+        oneOf: [{ type: "string" }],
+      };
+      const result = toGeminiSchema(schema) as Record<string, unknown>;
+      expect(result.type).toBe("STRING");
+      expect(result.description).toBe("keep me");
+      expect(result).not.toHaveProperty("examples");
+      expect(result).not.toHaveProperty("$anchor");
+      expect(result).not.toHaveProperty("exclusiveMinimum");
+      expect(result).not.toHaveProperty("oneOf");
+      expect(result).toHaveProperty("anyOf");
+    });
+
+    it("collapses array type to a single type with nullable", () => {
+      const result = toGeminiSchema({ type: ["string", "null"] }) as Record<string, unknown>;
+      expect(result.type).toBe("STRING");
+      expect(result.nullable).toBe(true);
     });
 
     it("preserves enum values", () => {
@@ -1223,6 +1289,54 @@ describe("transform/gemini", () => {
       expect(decls[1]!.name).toBe("new_tool");
     });
 
+    it("extracts schema from decl.parametersJsonSchema inside functionDeclarations (OpenCode format)", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "compress",
+                description: "Compress conversation",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    topic: { type: "string", description: "Topic" },
+                    content: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          summary: { type: "string" },
+                        },
+                        required: ["summary"],
+                      },
+                    },
+                  },
+                  required: ["topic", "content"],
+                },
+              },
+            ],
+          },
+        ],
+      };
+      wrapToolsAsFunctionDeclarations(payload);
+
+      const tools = payload.tools as Array<Record<string, unknown>>;
+      expect(tools).toHaveLength(1);
+      const decls = tools[0]!.functionDeclarations as Array<Record<string, unknown>>;
+      expect(decls).toHaveLength(1);
+      expect(decls[0]!.name).toBe("compress");
+      expect(decls[0]!.parameters).not.toHaveProperty("properties._placeholder");
+      expect((decls[0]!.parameters as any).properties).toHaveProperty("topic");
+      expect((decls[0]!.parameters as any).properties).toHaveProperty("content");
+      expect((decls[0]!.parameters as any).type).toBe("OBJECT");
+      expect((decls[0]!.parameters as any).properties.topic.type).toBe("STRING");
+      expect((decls[0]!.parameters as any).properties.content.type).toBe("ARRAY");
+      expect((decls[0]!.parameters as any).properties.content.items.type).toBe("OBJECT");
+      expect(decls[0]).not.toHaveProperty("parametersJsonSchema");
+    });
+
     it("handles multiple tools correctly", () => {
       const payload: RequestPayload = {
         contents: [],
@@ -1518,6 +1632,124 @@ describe("transform/gemini", () => {
       expect(tools).toHaveLength(2);
       expect(tools[0]).toHaveProperty("functionDeclarations");
       expect(tools[1]).toHaveProperty("googleSearch");
+    });
+
+    it("correctly preserves and normalizes OpenCode functionDeclarations with parametersJsonSchema", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "compress",
+                description: "Compress conversation",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    topic: { type: "string" },
+                    content: {
+                      type: "array",
+                      items: { type: "object", properties: { text: { type: "string" } } },
+                    },
+                  },
+                  required: ["topic", "content"],
+                },
+              },
+              {
+                name: "edit",
+                description: "Edit file",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string" },
+                    newString: { type: "string" },
+                    oldString: { type: "string" },
+                  },
+                  required: ["path", "newString", "oldString"],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = applyGeminiTransforms(payload, { model: "gemini-3.8-flash" });
+
+      expect(result.toolDebugMissing).toBe(0);
+      const tools = payload.tools as Array<Record<string, unknown>>;
+      expect(tools).toHaveLength(1);
+      expect(tools[0]).toHaveProperty("functionDeclarations");
+      expect(tools[0]).not.toHaveProperty("parameters");
+
+      const decls = tools[0]!.functionDeclarations as Array<Record<string, unknown>>;
+      expect(decls).toHaveLength(2);
+      expect(decls[0]!.name).toBe("compress");
+      expect(decls[1]!.name).toBe("edit");
+
+      // Verify compress parameters
+      const compressParams = decls[0]!.parameters as Record<string, unknown>;
+      expect(compressParams.type).toBe("OBJECT");
+      expect(compressParams).not.toHaveProperty("properties._placeholder");
+      expect((compressParams.properties as any).topic.type).toBe("STRING");
+      expect((compressParams.properties as any).content.type).toBe("ARRAY");
+      expect((compressParams.properties as any).content.items.type).toBe("OBJECT");
+      expect(decls[0]).not.toHaveProperty("parametersJsonSchema");
+
+      // Verify edit parameters
+      const editParams = decls[1]!.parameters as Record<string, unknown>;
+      expect(editParams.type).toBe("OBJECT");
+      expect(editParams).not.toHaveProperty("properties._placeholder");
+      expect((editParams.properties as any).path.type).toBe("STRING");
+      expect(decls[1]).not.toHaveProperty("parametersJsonSchema");
+    });
+
+    it("strips JSON-Schema keywords Antigravity rejects (exclusiveMinimum et al)", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "shell",
+                description: "Run a command",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    timeout: {
+                      type: "number",
+                      minimum: 1,
+                      maximum: 600,
+                      exclusiveMinimum: 0,
+                      exclusiveMaximum: 601,
+                      multipleOf: 1,
+                    },
+                    command: { type: "string", minLength: 1, maxLength: 4096 },
+                    tags: { type: "array", items: { type: "string" }, uniqueItems: true },
+                  },
+                  required: ["command"],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      applyGeminiTransforms(payload, { model: "gemini-3.8-flash" });
+
+      const tools = payload.tools as Array<Record<string, unknown>>;
+      const decls = tools[0]!.functionDeclarations as Array<Record<string, unknown>>;
+      const props = (decls[0]!.parameters as Record<string, unknown>).properties as Record<
+        string,
+        Record<string, unknown>
+      >;
+
+      expect(props.timeout).not.toHaveProperty("exclusiveMinimum");
+      expect(props.timeout).not.toHaveProperty("exclusiveMaximum");
+      expect(props.timeout).not.toHaveProperty("multipleOf");
+      expect(props.tags).not.toHaveProperty("uniqueItems");
+      // Keywords Gemini's Schema proto does support stay put.
+      expect(props.timeout.minimum).toBe(1);
+      expect(props.command.minLength).toBe(1);
     });
   });
 });
